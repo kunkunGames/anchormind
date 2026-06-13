@@ -18,7 +18,7 @@
 **memento-mcp 서버 자체를 설치·프로비저닝**한다: 의존성, `.env`, PostgreSQL(pgvector) 스키마/마이그레이션, 임베딩·LLM provider, 마스터 키, 서버 기동. 산출물은 **HTTP MCP 엔드포인트(`http://<host>:57332/mcp`)가 떠 있고 `GET /health`가 healthy인 상태**다.
 
 ### 1.2 비목표 (← CLIENT_SPEC 영역)
-- 클라이언트 CLI(Claude/Codex)를 이 서버에 **연결**(MCP 등록·훅·키 그룹 배정)하는 작업은 [`CLIENT_SPEC.md`](./CLIENT_SPEC.md)가 다룬다.
+- 클라이언트 CLI(Claude/Codex)를 이 서버에 **연결**(MCP 등록 + 키 검증)하는 작업은 [`CLIENT_SPEC.md`](./CLIENT_SPEC.md)가 다룬다.
 - 서버는 한 번 설치되면 N개의 클라이언트가 붙는다. 본 문서는 **서버 1회 설치**, CLIENT_SPEC는 **클라이언트마다 반복**.
 
 ### 1.3 두 온보딩 구분
@@ -26,10 +26,10 @@
 | | SERVER onboarding (본 문서) | CLIENT onboarding (`CLIENT_SPEC.md`) |
 |---|---|---|
 | 대상 | 서버 호스트 1대 | 클라이언트 CLI마다(Claude/Codex), 머신마다 |
-| 무엇 | DB·임베딩·.env·마이그레이션·서버 기동 | MCP 등록 + (선택) 시작/질의/종료 훅 |
+| 무엇 | DB·임베딩·.env·마이그레이션·서버 기동 | MCP 등록 + 키 검증 |
 | 도구 | `setup.sh` / `scripts/migrate.js` / `server.js` | `memento-mcp onboard`(Node 서브커맨드) |
 | 빈도 | 1회(+업그레이드) | 클라이언트×머신마다 |
-| 산출 | `/mcp` 엔드포인트 + 마스터/플랫폼 키 | 연결된 CLI + 결정적 기억 훅 |
+| 산출 | `/mcp` 엔드포인트 + 키 | 연결된 CLI(운영 규칙은 서버 instructions가 전달) |
 
 ---
 

@@ -32,8 +32,7 @@ const COMMANDS = {
   import:     () => import('../lib/cli/import.js'),
   completion: () => import('../lib/cli/completion.js'),
   session:    () => import('../lib/cli/session.js'),
-  onboard:          () => import('../lib/cli/onboard.js'),
-  'provision-keys': () => import('../lib/cli/provision-keys.js'),
+  onboard:    () => import('../lib/cli/onboard.js'),
 };
 
 /** 원격 모드를 지원하지 않는 로컬 전용 명령 목록 */
@@ -62,7 +61,6 @@ function printUsage() {
     '  completion <shell>               Print shell completion script (bash|zsh)',
     '  session <list|show|delete>       Manage active sessions (headless/CI)',
     '  onboard --endpoint h:p --key-env Connect a client CLI (Claude/Codex) to a memento server',
-    '  provision-keys --group --platforms  OPERATOR: issue optional API keys + key group (master key)',
     '',
     'Options:',
     '  --help                      Show this help message',
