@@ -146,7 +146,8 @@ node server.js
 ## 9. 운영 (서버 측 유지보수)
 
 - **세션 종료/유휴 reflect**: 서버가 자동 수행 — 종료 시 autoReflect(`lib/sessions.js:246,324`), 5분 유휴 스윕으로 `IDLE_REFLECT_HOURS`(기본 24h) 경과 세션 reflect(`lib/scheduler.js:94`). **클라이언트는 이를 재발명하지 않는다**(CLIENT_SPEC §10).
-- **주기 consolidate**: `memory_consolidate`는 마스터 키 전용(`lib/tools/memory.js:620-622`) → 서버 측 작업(cron 등)으로 마스터 키 사용. `CONSOLIDATE_INTERVAL_MS` 참고.
+- **주기 consolidate**: `memory_consolidate`는 마스터 키 전용(`lib/tools/memory.js:620-622`) → **서버 측 작업**(예: 서버 호스트의 cron/systemd timer)으로 마스터 키 사용. `CONSOLIDATE_INTERVAL_MS` 참고.
+- **주기·유휴 reflect/consolidate는 전적으로 서버의 책임이다.** 클라이언트 측 OS 스케줄러(Windows `schtasks` / macOS `launchd` / cron)는 온보딩에서 **완전 폐기**됐고(CLIENT_SPEC §10), 그 기능은 위 autoReflect-on-close + 5분 유휴 스윕 + 서버 측 주기 consolidate가 대체한다. 여기서 말하는 cron/timer는 **서버 호스트에서 마스터 키로 도는 서버 측 스케줄**이지 클라이언트 스케줄러가 아니다.
 - **노이즈 정리/백필**: `scripts`의 정리/백필 스크립트(`docs/INSTALL.md`).
 - **로그**: `LOG_DIR`(winston-daily-rotate), 메트릭 `prom-client`.
 

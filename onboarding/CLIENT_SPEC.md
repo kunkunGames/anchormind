@@ -237,7 +237,7 @@ overview | lifecycle | keywords | search | episode | multiplatform | tools | imp
 
 **`remember`는 세션종료 훅 대상이 아니다.** `remember`는 모델이 작성하는 **자기완결 content**가 필요한데 셸/훅은 그 품질의 파편을 합성할 수 없다. 세션종료 영속화 도구는 `reflect`(세션의 기존 파편 자동 종합)이며, 개별 사실의 `remember`는 세션 중 모델 주도로 남긴다.
 
-**주기 `memory_consolidate`.** 마스터 키 전용(`lib/tools/memory.js:620-622`)이라 클라이언트 호출 불가 → 서버 측 유지보수. v1의 `schtasks`/`launchd` L3 스케줄러는 삭제(서버 유휴 스윕이 대체).
+**주기 `memory_consolidate`.** 마스터 키 전용(`lib/tools/memory.js:620-622`)이라 클라이언트 호출 불가 → 서버 측 유지보수. **윈도우 스케줄러 완전 폐기:** v1의 클라이언트 OS 스케줄러(Windows `schtasks` / macOS `launchd` / cron) L3는 **전면 삭제**하며, 그 자리를 **서버의 autoReflect-on-close + 5분 유휴 스윕(`IDLE_REFLECT_HOURS`)** 과 서버 측 주기 consolidate가 대체한다. 클라이언트는 어떤 OS 스케줄러도 등록하지 않는다(선택 사항 아님).
 
 ---
 

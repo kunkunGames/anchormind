@@ -24,6 +24,7 @@ memento 온보딩은 **명확히 다른 두 작업**이다. 이 디렉터리는 
 
 ## 핵심 경계
 - **서버가 이미 하는 일**(클라이언트가 재발명하지 않음): always-on 규칙 전달(서버 `instructions` 필드), 세션종료·유휴 reflect(autoReflect + 유휴 스윕), 심층 가이드(`get_skill_guide`), 주기 consolidate(마스터 키). → 상세 근거는 각 스펙.
+- **윈도우 스케줄러 완전 폐기.** 클라이언트 측 OS 스케줄러(Windows `schtasks` / macOS `launchd` / cron)는 온보딩에서 **전면 삭제**한다. 주기·유휴 reflect는 **서버의 autoReflect-on-close + 5분 유휴 스윕(`IDLE_REFLECT_HOURS`)** 이, 주기 consolidate는 서버 측 작업이 대체한다(클라이언트 스케줄러 없음·불가). → 상세는 `CLIENT_SPEC.md` §10, `SERVER_SPEC.md` §9.
 - **클라이언트만 할 수 있는 일**: 각 CLI의 MCP 등록(L0)과, 시작/질의 시점의 결정적 훅(L2). → `CLIENT_SPEC.md`.
 
 > 본 `SPEC.md`는 인덱스다. 구현 명세는 위 두 문서에 있다.
