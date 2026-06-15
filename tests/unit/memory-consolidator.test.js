@@ -3,13 +3,14 @@
  *
  * 작성자: 최진호
  * 작성일: 2026-04-19
+ * 수정일: 2026-06-15 (feedbackFactor 라이브 계수로 갱신)
  *
- * applyFeedbackSignal(export) 및 timedStage 래퍼의 동작,
+ * feedbackFactor 및 timedStage 래퍼의 동작,
  * _resolveContradiction의 시간 논리, getStats 풀 부재 시 빈 객체 반환을
  * DB 없이 검증한다.
  *
  * mock 전략:
- * - applyFeedbackSignal: 순수 함수이므로 mock 없음
+ * - feedbackFactor: 순수 함수이므로 mock 없음
  * - MemoryConsolidator 인스턴스 메서드: 의존 메서드를 직접 교체하여 DB 접근 차단
  * - getStats: pool을 null로 만들어 빈 객체 반환 경로 검증
  */
@@ -17,51 +18,35 @@
 import { describe, it, beforeEach }  from "node:test";
 import assert                         from "node:assert/strict";
 
-import { applyFeedbackSignal, MemoryConsolidator } from "../../lib/memory/MemoryConsolidator.js";
-import { disconnectRedis }                          from "../../lib/redis.js";
+import { MemoryConsolidator }  from "../../lib/memory/MemoryConsolidator.js";
+import { feedbackFactor }      from "../../lib/memory/consolidate/feedbackFactor.js";
+import { disconnectRedis }     from "../../lib/redis.js";
 
 import { after } from "node:test";
 after(async () => { await disconnectRedis().catch(() => {}); });
 
-/* ── applyFeedbackSignal ── */
+/* ── feedbackFactor ── */
 
-describe("applyFeedbackSignal — 순수 함수", () => {
+describe("feedbackFactor — 순수 함수", () => {
 
-  it("relevant=true, sufficient=true → signal=+1, importance 증가", () => {
-    const result = applyFeedbackSignal(0.5, true, true);
-    assert.ok(result > 0.5, `expected > 0.5, got ${result}`);
+  it("relevant=true, sufficient=true → POSITIVE_FACTOR 1.1", () => {
+    assert.strictEqual(feedbackFactor(true, true), 1.1);
   });
 
-  it("relevant=false → signal=-1, importance 감소", () => {
-    const result = applyFeedbackSignal(0.5, false, false);
-    assert.ok(result < 0.5, `expected < 0.5, got ${result}`);
+  it("relevant=false → NEGATIVE_FACTOR 0.85", () => {
+    assert.strictEqual(feedbackFactor(false, false), 0.85);
+    assert.strictEqual(feedbackFactor(false, true),  0.85);
   });
 
-  it("relevant=true, sufficient=false → signal=-0.5, importance 소폭 감소", () => {
-    const base   = 0.5;
-    const result = applyFeedbackSignal(base, true, false);
-    assert.ok(result < base,  `expected < ${base}, got ${result}`);
-    assert.ok(result > 0.05,  `expected > 0.05, got ${result}`);
+  it("relevant=true, sufficient=false → MIXED_FACTOR 0.95", () => {
+    assert.strictEqual(feedbackFactor(true, false), 0.95);
   });
 
-  it("상한 1.0 초과 불가", () => {
-    const result = applyFeedbackSignal(0.99, true, true);
-    assert.ok(result <= 1.0, `capped at 1.0, got ${result}`);
-  });
-
-  it("하한 0.05 미만 불가", () => {
-    const result = applyFeedbackSignal(0.06, false, false);
-    assert.ok(result >= 0.05, `floored at 0.05, got ${result}`);
-  });
-
-  it("importance=0 입력 시 결과는 0.05 이상", () => {
-    const result = applyFeedbackSignal(0, false, false);
-    assert.ok(result >= 0.05);
-  });
-
-  it("FEEDBACK_LR=0.05 기반 계산: relevant=true/sufficient=true, importance=0.5 → 0.5*(1+0.05)=0.525", () => {
-    const result = applyFeedbackSignal(0.5, true, true);
-    assert.ok(Math.abs(result - 0.525) < 1e-9, `expected 0.525, got ${result}`);
+  it("반환값이 세 계수 중 하나임을 확인", () => {
+    const valid = new Set([0.85, 0.95, 1.1]);
+    assert.ok(valid.has(feedbackFactor(true,  true)));
+    assert.ok(valid.has(feedbackFactor(false, false)));
+    assert.ok(valid.has(feedbackFactor(true,  false)));
   });
 
 });

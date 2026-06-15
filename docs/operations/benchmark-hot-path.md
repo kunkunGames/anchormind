@@ -106,6 +106,20 @@ DATABASE_URL=postgresql://... node scripts/benchmark-hot-path.js \
 
 benchmark 실행 중 Prometheus 메트릭을 함께 관찰하면 hot path 오버헤드의 원인을 symbolic 계층 내 세부 단계별로 분리할 수 있다.
 
+## HNSW 인덱스 강제 검색 (v4.6.0)
+
+v4.6.0에서 벡터 검색 경로(`lib/tools/db.js`)에 다음 세 플래그가 트랜잭션 시작 시 자동 적용된다.
+
+```sql
+SET LOCAL enable_seqscan    = off;
+SET LOCAL enable_bitmapscan = off;
+SET LOCAL hnsw.iterative_scan = relaxed_order;
+```
+
+`valid_to`/`agent_id` 필터가 붙으면 PostgreSQL planner가 HNSW 대신 b-tree bitmap scan으로 전환하여 308ms 수준의 지연이 발생했다. 두 스캔을 모두 차단하면 `ORDER BY embedding<=>v LIMIT` 경로가 HNSW index scan을 타게 되어 **308ms→7ms**로 단축된다. `ef_search=80`은 기존 session-level 설정 그대로 유지된다.
+
+benchmark-hot-path 측정 시 이 변경이 `recall` p50/p95/p99에 유의미한 영향을 줄 수 있으므로, v4.6.0 기준선 확보 시 위 플래그가 활성화된 상태(기본값)로 측정해야 한다.
+
 ## Notes
 
 - `scripts/baseline-v27.json`은 초기 스켈레톤 상태로 커밋되어 있다. 실제 측정 전에는 모든 수치가 `null`이다.

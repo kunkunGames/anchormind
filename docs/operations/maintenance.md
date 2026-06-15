@@ -86,6 +86,22 @@ rate 값(authDeniedRate5m, toolErrorRate5m 등)은 서버 메모리의 직전 sn
 
 `?windowSec=N` 쿼리 파라미터로 rate 계산 윈도우를 조정한다 (기본 60초, 최솟값 5초).
 
+### 배치 풀 메트릭
+
+`BATCH_DATABASE_URL`이 설정된 경우 `EmbeddingWorker`와 `BatchRememberProcessor`가 전용 연결 풀(`application_name=memento-mcp:batch`)을 사용한다. 풀 상태는 아래 세 게이지로 관찰한다.
+
+```
+mcp_batch_pool_active_connections   — 체크아웃된 연결 수
+mcp_batch_pool_idle_connections     — 유휴 연결 수
+mcp_batch_pool_waiting_count        — 연결 대기 쿼리 수
+```
+
+`mcp_batch_pool_waiting_count`가 지속적으로 0이 아니면 배치 풀 크기 또는 `BATCH_DATABASE_URL` 연결 수 설정을 검토한다.
+
+### 비반영 세션 SCAN 상한
+
+`SessionActivityTracker.getUnreflectedSessions(limit)`는 Redis SCAN(COUNT 50)으로 `frag:activity:*` 키를 순회한다. 최대 20회(50×20=1000키) 순회 후 중단하는 상한(`MAX_SCANS=20`)이 적용되어 있다. Admin UI "REFLECT ALL"(limit=1000), context 빌더(limit=3) 등 호출 사이트에 따라 실제 탐색 범위가 달라지며, Redis keyspace가 매우 큰 환경에서는 상한 이전에 조기 종료될 수 있다.
+
 ### Grafana 경로
 
 memento-mcp 서버의 `/metrics` 엔드포인트를 scrape한다 (인증 필요, scrape_interval 15초).

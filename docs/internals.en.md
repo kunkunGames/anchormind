@@ -1,5 +1,7 @@
 # Internals
 
+> v4.6.0
+
 ## MemoryManager (Orchestration Layer)
 
 MemoryManager is a thin facade. Business logic is delegated to 4 processors under `lib/memory/processors/`.
@@ -19,7 +21,7 @@ MemoryManager is a thin facade. Business logic is delegated to 4 processors unde
 |--------|-------------|------|
 | `ContextBuilder` | `context()` | Core/Working/Anchor Memory composition, rankedInjection, context hint generation |
 | `ReflectProcessor` | `reflect()` | summary/decisions/errors_resolved/new_procedures/open_questions fragment conversion and storage, episode creation, Working Memory cleanup |
-| `BatchRememberProcessor` | `batchRemember()` | Phase A (validation) → Phase B (transactional INSERT) → Phase C (post-processing) 3-stage batch storage |
+| `BatchRememberProcessor` | `batchRemember()` | Phase A (validation) → Phase B (transactional INSERT) → Phase C (post-processing) 3-stage batch storage. When Redis is available, Phase B is delegated to `_enqueueAsync()` for async processing by BatchRememberWorker. Uses `getBatchPool()` (dedicated batch pool) for DB connections |
 | `QuotaChecker` | `remember()` entry | Per-API-key fragment quota (fragment_limit) check |
 | `RememberPostProcessor` | After `remember()` completes | Embedding generation, morpheme indexing, auto-linking, assertion check, temporal linking, evaluation queue enqueue, ProactiveRecall pipeline. ProactiveRecall logic included -- creates automatic `related_to` links with fragments sharing keyword overlap (>=50%) on remember() |
 
@@ -141,7 +143,7 @@ Stages are declared as a `stageDefs` array. Adding a new stage requires only a s
 15. `detect_supersessions` — Gemini CLI judges supersession relationships for fragment pairs with embedding similarity 0.7~0.85. Operates complementarily to GraphLinker's >= 0.85 range
 16. `process_pending_contradictions` — when Gemini CLI is available, dequeues up to 10 items from Redis pending queue for re-evaluation
 17. `feedback_report` — generates aggregated usefulness report from tool_feedback/task_feedback
-18. `feedback_calibration` — incremental importance adjustment based on last 24 hours of feedback. `sufficient=true`: +5%, `sufficient=false`: -2.5%, `relevant=false`: -5%. lr=0.05, clipped to [0.05, 1.0]. Excludes `is_anchor=true`
+18. `feedback_calibration` — aggregates tool_feedback by session over the last 7 days, then applies a multiplier via the `feedbackFactor(allRelevant, allSufficient)` pure function (lib/memory/consolidate/feedbackFactor.js). POSITIVE (allRelevant=true AND allSufficient=true): ×1.1, MIXED (allRelevant=true AND allSufficient=false): ×0.95, NEGATIVE (allRelevant=false): ×0.85. Excludes `is_anchor=true`, clamped to [0.05, 1.0]
 19. `prune_keyword_indexes` — removes orphaned Redis keyword indexes
 20. `collect_stale_fragments` — collects fragments past their verification cycle; written to results.stale_fragments
 21. `purge_stale_reflections` — among topic='session_reflect' fragments, keeps the latest 5 per type and deletes the rest with 30+ days age + importance < 0.3 (max 30 per cycle)
@@ -208,9 +210,21 @@ All six `FragmentReader` methods — `searchByKeywords`, `searchByTopic`, `searc
 
 ### Session Auto-Recovery
 
-When a "Session not found" or "Session expired" error occurs in the session store, the server immediately runs a re-authentication flow. During re-authentication, the original session's `keyId` and `groupKeyIds` are restored and injected into the new session. The reconnection is transparent to the client; the re-authentication event is recorded in the audit log.
+When a "Session not found" or "Session expired" error occurs in the session store, the server immediately runs a re-authentication flow. On successful re-authentication, the original `sessionId` sent by the client is passed directly to `createStreamableSessionWithId` so the session is recreated under the same ID. The client experiences no interruption. Log format: `[Streamable] Session recovered with same-id: <sessionId> (keyId: ...)`.
+
+**keyId cross-validation:** Before performing recovery, the server reads the existing session data from Redis. If the existing session is found and `session.keyId !== authResult.keyId`, it returns 403 Forbidden and refuses recovery. `recordTenantIsolationBlocked("session_recover_keyid_mismatch")` and `recordSessionRecovery("keyid_mismatch")` are called. If Redis is disabled or the existing session is absent, validation is skipped and same-ID recovery proceeds.
 
 Legacy SSE sessions also apply a sliding window: `expiresAt` is refreshed to `now + SESSION_TTL_MS` on every validated request.
+
+### Session Idle Reflect
+
+`cleanupExpiredSessions` runs `autoReflect(sessionId)` for sessions that have been inactive longer than `MCP_IDLE_REFLECT_HOURS` (default 24h) before checking expiry. This prevents memory loss in long-lived sessions (30-day TTL) that accumulate activity without an intermediate reflect.
+
+Trigger condition: `(now - session.lastAccessedAt) > idleThresholdMs` AND (`session.lastReflectedAt` is absent OR `(now - session.lastReflectedAt) > idleThresholdMs`). On success, `session.lastReflectedAt = now` is set to prevent duplicate runs. Failures are ignored and the loop continues. Metric: `mcp_session_idle_reflect_total`.
+
+### SessionActivityTracker.getUnreflectedSessions Upper Bound
+
+`getUnreflectedSessions(limit)` in `lib/memory/SessionActivityTracker.js` scans Redis for `frag:activity:*` keys. To prevent infinite iteration over a large keyspace, a `MAX_SCANS=20` upper bound is enforced. Each SCAN call passes `COUNT 50`, so at most 20 × 50 = 1,000 keys are processed before stopping. Early exit also occurs when `limit` is reached first.
 
 ### Redis TTL Sync
 
@@ -273,7 +287,7 @@ Runs asynchronously in the `MemoryManager._autoLinkOnRemember()` chain on every 
 
 **Weight formula:** `max(0.3, 1.0 - hours/24)` — 0h=1.0, 12h=0.5, 24h=0.3.
 
-**API key isolation:** `options.keyId` is forwarded as `key_id = ANY($n)` in the SQL query so that fragments owned by other API keys are never linked.
+**API key isolation:** `options.keyId` is forwarded as `key_id = ANY($n)` in the SQL query so that fragments owned by other API keys are never linked. Key scope SQL conditions are generated by the shared helper `keyScopeClause(params, column, { keyId, groupKeyIds })` in `lib/memory/keyScope.js`. GraphLinker, FragmentSearch, `getById`, `findCaseIdBySessionTopic`, `findErrorFragmentsBySessionTopic`, and all other paths requiring key filtering are unified through this helper.
 
 `fragment_links.weight` was changed from integer to real in migration-023 to support float weights.
 

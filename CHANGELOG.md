@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-06-16
+
+### Added
+- 벡터 검색 HNSW 인덱스 강제 옵션·토글: `ORDER BY embedding <=> v LIMIT` 트랜잭션에 `enable_seqscan=off`·`enable_bitmapscan=off`·`hnsw.iterative_scan` 힌트를 적용해 HNSW 인덱스 경로를 강제.
+- `batch_remember` 비동기(파이어앤포겟) 모드 opt-in: `async: true` 지정 시 선검증 후 Redis 큐 적재, `{async, accepted, rejected, jobId}` 즉시 반환. `BatchRememberWorker`가 본처리. 기본 `async: false`로 기존 동기 동작 불변. Redis 비활성 환경에서는 동기 폴백.
+- 배치 작업 전용 연결 풀(`getBatchPool`, `application_name='memento-mcp:batch'`) 및 배치 풀 통계 메트릭 수집.
+
+### Changed
+- HNSW 인덱스 정의의 `ef_construction` 정합화, L3 형태소 보강 검색 병렬 실행, RRF 병합 후보에 importance 하한 컷오프 적용.
+- reflect 항목 자기완결성 게이트 및 한글 하한 강화.
+- 키 스코프 조회를 `keyScopeClause` 공용 헬퍼로 통일: `getById`·`findCaseIdBySessionTopic`·`findErrorFragmentsBySessionTopic`·`GraphLinker` 공유. `GraphLinker` 키 필터를 파라미터 바인딩·`text` 타입 정합으로 정리.
+- 피드백 importance 보정 계수를 `feedbackFactor` 순수 함수로 단일화(라이브 계수 0.85/1.1/0.95 유지).
+- `tools/call` 메트릭 중복 집계 제거.
+- 내부 중복 정리: 요청 컨텍스트 추출·키워드 정규화·도구 감사 래퍼·검색 SELECT 상수·affect 조건·Bearer 추출·환경변수 리스트 파싱·공통 파라미터 스키마 각각 단일 위치로 통합.
+- 대형 메서드 분해: `remember`·`handleMcpPost`·`buildAdminPaths`·`dispatchJsonRpc`·`ContextBuilder.build`·검색 RRF·컨솔리데이션/분해/압축.
+
+### Fixed
+- `getUnreflectedSessions`의 Redis SCAN 순회에 상한(최대 20라운드)을 두어 대용량 keyspace에서 context 응답이 지연되던 문제 해결.
+
 ## [4.5.0] - 2026-06-09
 
 ### Added
@@ -387,7 +406,7 @@ recall 최종 정렬에서 cross-encoder reranker 결과를 보존하고, topic/
 
 ## [3.1.1] - 2026-04-24
 
-LLM Provider 체인 동시성 제어를 추가해 Ollama Cloud, fatherless 프록시 등에서 동시 요청 버스트로 발생하던 HTTP 429 연쇄 실패를 차단한다. 실측상 ollama.com `gemma4:31b-cloud`는 20-24 동시 요청을 넘기면 429를 반환하고, fatherless `google/gemma-4-31B-it`는 동시 4까지만 허용한다. 33.3GB 메모리 피크 사건의 주요 원인이던 LLM 체인 폭주 루프를 완화한다.
+LLM Provider 체인 동시성 제어를 추가해 Ollama Cloud 및 외부 LLM 프록시 등에서 동시 요청 버스트로 발생하던 HTTP 429 연쇄 실패를 차단한다. 실측상 ollama.com `gemma4:31b-cloud`는 20-24 동시 요청을 넘기면 429를 반환하고, 일부 외부 프록시는 동시 4까지만 허용한다. 33.3GB 메모리 피크 사건의 주요 원인이던 LLM 체인 폭주 루프를 완화한다.
 
 ### Added
 
@@ -404,7 +423,7 @@ LLM Provider 체인 동시성 제어를 추가해 Ollama Cloud, fatherless 프�
   - `LLM_CONCURRENCY` (JSON, chainKey 또는 provider name 기준 오버라이드)
 - 내장 기본 한도 (`lib/config.js` `DEFAULT_LLM_CONCURRENCY`):
   - `ollama=16`
-  - `openai|https://fatherless.nerdvana.kr/v1|google/gemma-4-31B-it=3`
+  - `openai|https://llm.example.com/v1|google/gemma-4-31B-it=3`
   - `openai|https://token-plan-sgp.xiaomimimo.com/v1|mimo-v2-pro=8`
   - `gemini-cli=1`, `copilot-cli=1`, `codex-cli=1`, `qwen-cli=1`
   - 기타 provider = 10

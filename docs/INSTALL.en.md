@@ -37,7 +37,7 @@ The fastest path for someone new to this repository is to hand the work to an AI
 After the assistant finishes, all of the following must hold:
 
 - `.env` exists, with `MEMENTO_ACCESS_KEY`, `POSTGRES_*`, and `REDIS_*` populated
-- `npm run migrate` succeeds through `migration-035`
+- `npm run migrate` succeeds through `migration-037`
 - `node bin/memento.js health` returns OK for DB, Redis, and the embedding provider
 - The AI client lists `mcp__*__remember`, `recall`, and `reflect`
 - A `memory_stats` call returns a valid response (zero fragments is fine)
@@ -197,6 +197,12 @@ psql $DATABASE_URL -f lib/memory/migration-034-v2.16.0-bundle.sql
 
 # fragments.morpheme_indexed BOOLEAN + backfill + sparse partial index
 psql $DATABASE_URL -f lib/memory/migration-035-morpheme-indexed.sql
+
+# fragments.split_attempt_failed_at TIMESTAMPTZ column
+psql $DATABASE_URL -f lib/memory/migration-036-split-attempt-failed-at.sql
+
+# HNSW index rename for naming consistency
+psql $DATABASE_URL -f lib/memory/migration-037-hnsw-index-rename.sql
 ```
 
 > **Re-running migration-007**: If you change `EMBEDDING_DIMENSIONS` or switch embedding providers, re-run `scripts/post-migrate-flexible-embedding-dims.js` to update the vector column dimensions in both the `fragments` and `morpheme_dict` tables simultaneously. The backward-compatible symlink at `scripts/migration-007-flexible-embedding-dims.js` has been removed; use `scripts/post-migrate-flexible-embedding-dims.js` directly.
@@ -214,6 +220,12 @@ npm run lint:migrations
 ```
 
 See [docs/migration-conventions.md](migration-conventions.md) for convention details.
+
+> **migration-035 morpheme_indexed**: Adds `fragments.morpheme_indexed BOOLEAN NOT NULL DEFAULT false`. Existing fragments with `keywords IS NOT NULL` are automatically backfilled to `true`. A sparse partial index `idx_fragments_morpheme_indexed` (`WHERE morpheme_indexed = false`) tracks fragments pending re-indexing. `DEFAULT false` makes hot deploy safe without rollback. The Consistency Gate restricts L3 morpheme search to fragments where `morpheme_indexed = true`.
+
+> **migration-036 split_attempt_failed_at**: Adds `fragments.split_attempt_failed_at TIMESTAMPTZ` to record split-attempt failure timestamps, enabling the reprocessing scheduler to track failure history.
+
+> **migration-037 hnsw-index-rename**: Renames HNSW indexes for naming consistency. Drops the existing indexes and recreates them under the standard naming convention.
 
 > **migration-034-v2.16.0-bundle CONCURRENTLY option**: migration-034-v2.16.0-bundle runs inside a transaction, so it uses `CREATE UNIQUE INDEX` (not CONCURRENTLY). For large production tables (millions of fragments) where minimizing lock time is critical, run the two statements below manually before `npm run migrate`. The IF NOT EXISTS guard ensures they are safely skipped during automatic execution.
 >
@@ -254,6 +266,19 @@ Verify migration-034-v2.16.0-bundle index application:
 -- In psql
 \d agent_memory.fragments
 -- Both idx_fragments_idempotency_tenant and idx_fragments_idempotency_master should appear.
+```
+
+### Upgrading from before migration-037
+
+```bash
+# 1. Update dependencies
+npm install
+
+# 2. Run migrations (includes migration-036, migration-037)
+npm run migrate
+
+# 3. Restart the server
+node server.js
 ```
 
 Applied migrations are tracked in `agent_memory.schema_migrations`. Only unapplied files are executed in order.

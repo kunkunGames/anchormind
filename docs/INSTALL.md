@@ -37,7 +37,7 @@
 위 프롬프트를 받은 AI가 정상적으로 처리했다면 다음이 모두 충족되어야 한다.
 
 - `.env` 파일이 생성되고 `MEMENTO_ACCESS_KEY`·`POSTGRES_*`·`REDIS_*` 키가 모두 채워져 있다
-- `npm run migrate`가 `migration-035`까지 통과한다
+- `npm run migrate`가 `migration-037`까지 통과한다
 - `node bin/memento.js health`가 DB/Redis/임베딩 제공자 모두 OK를 반환한다
 - AI 클라이언트 도구 목록에 `mcp__*__remember`·`recall`·`reflect`가 노출된다
 - `memory_stats` 호출이 0건이라도 정상 응답을 반환한다
@@ -134,6 +134,8 @@ psql $DATABASE_URL -f lib/memory/migration-032-fragment-claims.sql              
 psql $DATABASE_URL -f lib/memory/migration-033-symbolic-hard-gate.sql                    # api_keys.symbolic_hard_gate 컬럼 (symbolic hard gate opt-in)
 psql $DATABASE_URL -f lib/memory/migration-034-v2.16.0-bundle.sql                        # api_keys.default_mode + fragments.affect + fragments.idempotency_key (단일 번들)
 psql $DATABASE_URL -f lib/memory/migration-035-morpheme-indexed.sql                      # fragments.morpheme_indexed BOOLEAN 추가 + 기존 행 백필 + sparse partial index
+psql $DATABASE_URL -f lib/memory/migration-036-split-attempt-failed-at.sql               # split_attempt_failed_at 컬럼 추가
+psql $DATABASE_URL -f lib/memory/migration-037-hnsw-index-rename.sql                     # HNSW 인덱스 이름 정합화
 ```
 
 > **migration-007 재실행**: `EMBEDDING_DIMENSIONS`를 변경하거나 임베딩 제공자를 전환한 경우, `post-migrate-flexible-embedding-dims.js`를 재실행하면 `fragments` 테이블과 `morpheme_dict` 테이블의 벡터 차원이 동시에 갱신된다. 구 경로 `scripts/migration-007-flexible-embedding-dims.js` 심볼릭 링크는 제거됐으므로 `scripts/post-migrate-flexible-embedding-dims.js`를 직접 사용한다.
@@ -151,6 +153,10 @@ psql $DATABASE_URL -f lib/memory/migration-035-morpheme-indexed.sql             
 > ```
 
 > **migration-035 morpheme_indexed**: `fragments.morpheme_indexed BOOLEAN NOT NULL DEFAULT false` 컬럼을 추가한다. 마이그레이션 실행 시 기존 `keywords IS NOT NULL` 파편은 `true`로 자동 백필된다. 부분 인덱스 `idx_fragments_morpheme_indexed`(`WHERE morpheme_indexed = false`)로 재인덱싱 대상 파편을 sparse하게 추적한다. `DEFAULT false`이므로 롤백 없이 hot deploy가 안전하다. Consistency Gate는 MorphemeIndex 등록이 완료된 파편(`morpheme_indexed = true`)만 morpheme 검색 대상으로 제한한다.
+
+> **migration-036 split_attempt_failed_at**: `fragments.split_attempt_failed_at TIMESTAMPTZ` 컬럼을 추가한다. 분할 시도 실패 타임스탬프를 기록하여 재처리 스케줄러가 실패 이력을 추적한다.
+
+> **migration-037 hnsw-index-rename**: HNSW 인덱스 명칭을 정합화한다. 기존 인덱스를 삭제하고 표준 네이밍 규칙에 맞게 재생성한다.
 
 > **rollback 파일 네이밍**: rollback SQL 파일은 `rollback-migration-NNN-*.sql` 형식으로 이름을 지정해야 한다. `migrate.js`의 auto-pickup glob은 `migration-*.sql` 패턴만 인식하므로, `rollback-` 접두어를 붙이면 자동 실행에서 제외된다.
 
@@ -202,6 +208,19 @@ npm run migrate
 #    BATCH_DATABASE_URL: batchPool 전용 DB URL. 미설정 시 DATABASE_URL 공유.
 
 # 4. 서버 재시작
+node server.js
+```
+
+### migration-037 이전 버전에서 업그레이드
+
+```bash
+# 1. 의존성 업데이트
+npm install
+
+# 2. 마이그레이션 실행 (migration-036, migration-037 포함)
+npm run migrate
+
+# 3. 서버 재시작
 node server.js
 ```
 

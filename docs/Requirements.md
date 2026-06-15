@@ -34,6 +34,8 @@
 |------|------|
 | `migration-034-v2.16.0-bundle.sql` | `api_keys.default_mode TEXT` 컬럼 + 인덱스 |
 | `migration-034-v2.16.0-bundle.sql` | `fragments.affect TEXT CHECK(...)` 컬럼 + partial 인덱스 |
+| `migration-036-split-attempt-failed-at.sql` | `fragments.split_attempt_failed_at TIMESTAMPTZ` 컬럼 추가 |
+| `migration-037-hnsw-index-rename.sql` | HNSW 인덱스 이름 정합화 |
 
 `post-migrate-flexible-embedding-dims.js`: `EMBEDDING_DIMENSIONS` 변경 또는 임베딩 제공자 전환 시 `fragments`와 `morpheme_dict` 두 테이블의 벡터 컬럼 차원을 동시에 갱신한다. 임베딩 제공자 전환마다 재실행이 필요하다.
 

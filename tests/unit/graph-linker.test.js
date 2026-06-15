@@ -17,12 +17,14 @@
 
 import { describe, it, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { keyScopeClause } from "../../lib/memory/keyScope.js";
 
 /* ── 실 모듈 의존성 주입 버전 (GraphLinker 로직 재현) ── */
 
 /**
  * GraphLinker.linkFragment 핵심 로직을 DB/Store를 주입 받아 재현.
  * 실 모듈은 queryWithAgentVector를 직접 호출하므로 동일 로직을 주입 가능하게 래핑.
+ * keyScopeClause를 직접 사용하여 실 모듈과 동일한 파라미터 바인딩 패턴을 검증한다.
  */
 class InjectableGraphLinker {
   constructor({ db, store }) {
@@ -30,25 +32,20 @@ class InjectableGraphLinker {
     this.store = store;
   }
 
-  _buildKeyFilter(allowedKeyIds, alias = "") {
-    const col = alias ? `${alias}.key_id` : "key_id";
-    if (allowedKeyIds === null) return "";
-    if (allowedKeyIds.length === 1) return ` AND ${col} = ${allowedKeyIds[0]}`;
-    return ` AND ${col} = ANY(ARRAY[${allowedKeyIds.join(",")}]::int[])`;
-  }
-
   async linkFragment(fragmentId, agentId = "default", keyId = null, groupKeyIds = []) {
-    const allowedKeyIds = keyId != null
-      ? [keyId, ...(Array.isArray(groupKeyIds) ? groupKeyIds : [])]
-      : null;
-
     const fragResult = await this.db.query("SELECT_FRAG", [fragmentId]);
     if (!fragResult.rows || fragResult.rows.length === 0) return 0;
 
     const newFragment = fragResult.rows[0];
 
     /* ── Semantic Dedup Gate ── */
-    const dedupResult = await this.db.query("SELECT_DEDUP", [fragmentId, newFragment.topic]);
+    const dedupParams    = [fragmentId, newFragment.topic];
+    const dedupKeyClause = keyScopeClause(dedupParams, "key_id", { keyId, groupKeyIds });
+    const dedupResult = await this.db.query("SELECT_DEDUP",
+      dedupParams,
+      undefined,
+      { keyClause: dedupKeyClause }
+    );
 
     if (dedupResult.rows && dedupResult.rows.length > 0) {
       const existing   = dedupResult.rows[0];
@@ -62,10 +59,12 @@ class InjectableGraphLinker {
       /* 0.90~0.94: near-duplicate, 계속 진행 */
     }
 
+    const candParams    = [fragmentId, newFragment.topic];
+    const candKeyClause = keyScopeClause(candParams, "key_id", { keyId, groupKeyIds });
     const candidates = await this.db.query("SELECT_CANDIDATES",
-      [fragmentId, newFragment.topic],
+      candParams,
       undefined,
-      allowedKeyIds
+      { keyClause: candKeyClause }
     );
 
     if (!candidates.rows || candidates.rows.length === 0) return 0;
@@ -124,8 +123,8 @@ function makeMockDb(resultMap = {}) {
   const calls = [];
   return {
     calls,
-    async query(sqlKey, params, mode, allowedKeyIds) {
-      calls.push({ sqlKey, params, mode, allowedKeyIds });
+    async query(sqlKey, params, mode, opts) {
+      calls.push({ sqlKey, params, mode, opts });
       return resultMap[sqlKey] ?? { rows: [] };
     }
   };
@@ -199,7 +198,7 @@ describe("GraphLinker — Semantic Dedup Gate", () => {
 });
 
 describe("GraphLinker — keyId 격리", () => {
-  it("keyId!=null이면 allowedKeyIds가 SELECT_CANDIDATES 쿼리에 전달된다", async () => {
+  it("keyId!=null이면 keyScopeClause SQL 절이 SELECT_CANDIDATES opts에 전달된다", async () => {
     const db = makeMockDb({
       SELECT_FRAG      : { rows: [{ id: "f1", content: "내용", topic: "t", type: "fact", created_at: "2026-04-19T00:00:00Z" }] },
       SELECT_DEDUP     : { rows: [] },
@@ -208,14 +207,18 @@ describe("GraphLinker — keyId 격리", () => {
     const store = makeMockStore();
     const l     = new InjectableGraphLinker({ db, store });
 
-    await l.linkFragment("f1", "agent", 42, []);
+    await l.linkFragment("f1", "agent", "k42", []);
 
     const candidateCall = db.calls.find(c => c.sqlKey === "SELECT_CANDIDATES");
     assert.ok(candidateCall, "SELECT_CANDIDATES 쿼리가 호출되어야 한다");
-    assert.deepStrictEqual(candidateCall.allowedKeyIds, [42]);
+    /** keyScopeClause는 IS NOT DISTINCT FROM + ANY(::text[]) 패턴을 생성한다 */
+    assert.ok(candidateCall.opts.keyClause.includes("IS NOT DISTINCT FROM"), "스칼라 IS NOT DISTINCT FROM 포함 필요");
+    assert.ok(candidateCall.opts.keyClause.includes("::text[]"), "text[] 캐스팅 포함 필요");
+    /** params 배열에 keyId("k42")와 groupKeyIds 배열이 push됐는지 확인 */
+    assert.ok(candidateCall.params.includes("k42"), "params에 keyId가 바인딩되어야 한다");
   });
 
-  it("groupKeyIds 포함 시 allowedKeyIds에 합산된다", async () => {
+  it("groupKeyIds 포함 시 keyScopeClause params에 그룹 배열이 포함된다", async () => {
     const db = makeMockDb({
       SELECT_FRAG      : { rows: [{ id: "f1", content: "내용", topic: "t", type: "fact", created_at: "2026-04-19T00:00:00Z" }] },
       SELECT_DEDUP     : { rows: [] },
@@ -224,13 +227,18 @@ describe("GraphLinker — keyId 격리", () => {
     const store = makeMockStore();
     const l     = new InjectableGraphLinker({ db, store });
 
-    await l.linkFragment("f1", "agent", 10, [20, 30]);
+    /** keyScopeClause 계약: groupKeyIds가 non-empty면 arr=groupKeyIds, keyId는 스칼라 바인딩 */
+    await l.linkFragment("f1", "agent", "k10", ["k10", "k20", "k30"]);
 
     const candidateCall = db.calls.find(c => c.sqlKey === "SELECT_CANDIDATES");
-    assert.deepStrictEqual(candidateCall.allowedKeyIds, [10, 20, 30]);
+    const arrayParam = candidateCall.params.find(p => Array.isArray(p));
+    assert.ok(arrayParam, "params에 그룹 배열이 포함되어야 한다");
+    assert.deepStrictEqual(arrayParam, ["k10", "k20", "k30"]);
+    /** 스칼라 바인딩에 keyId가 있어야 한다 */
+    assert.ok(candidateCall.params.includes("k10"), "keyId 스칼라 바인딩 필요");
   });
 
-  it("keyId=null(master)이면 allowedKeyIds=null 전달", async () => {
+  it("keyId=null(master)이면 keyScopeClause가 빈 절 반환, params 불변", async () => {
     const db = makeMockDb({
       SELECT_FRAG      : { rows: [{ id: "f1", content: "내용", topic: "t", type: "fact", created_at: "2026-04-19T00:00:00Z" }] },
       SELECT_DEDUP     : { rows: [] },
@@ -242,7 +250,9 @@ describe("GraphLinker — keyId 격리", () => {
     await l.linkFragment("f1", "agent", null, []);
 
     const candidateCall = db.calls.find(c => c.sqlKey === "SELECT_CANDIDATES");
-    assert.strictEqual(candidateCall.allowedKeyIds, null);
+    assert.strictEqual(candidateCall.opts.keyClause, "", "master(null)이면 keyClause 빈 문자열");
+    /** params는 [fragmentId, topic] 2개로 그대로여야 한다 */
+    assert.strictEqual(candidateCall.params.length, 2, "master 경로에서는 params에 key 바인딩 추가 없음");
   });
 });
 
@@ -309,23 +319,27 @@ describe("GraphLinker.retroLink", () => {
   });
 });
 
-describe("GraphLinker._buildKeyFilter", () => {
-  it("allowedKeyIds=null이면 빈 문자열 반환", () => {
-    const l = new InjectableGraphLinker({ db: {}, store: {} });
-    assert.strictEqual(l._buildKeyFilter(null), "");
+/** _buildKeyFilter는 제거됨. keyScopeClause 직접 통합 검증 */
+describe("GraphLinker — keyScopeClause 바인딩 정합 (회귀)", () => {
+  it("keyId=null이면 빈 절, params 불변", () => {
+    const params = ["seed"];
+    const clause = keyScopeClause(params, "key_id", { keyId: null, groupKeyIds: [] });
+    assert.strictEqual(clause, "");
+    assert.deepStrictEqual(params, ["seed"]);
   });
 
-  it("allowedKeyIds=[42]이면 단일 = 조건 반환", () => {
-    const l      = new InjectableGraphLinker({ db: {}, store: {} });
-    const filter = l._buildKeyFilter([42]);
-    assert.ok(filter.includes("= 42"), `단일 keyId 조건 포함 필요, 실제: ${filter}`);
-    assert.ok(!filter.includes("ANY"), "단일이면 ANY 사용 안함");
+  it("단일 keyId이면 IS NOT DISTINCT FROM + ANY(::text[]) 패턴, 값이 text로 바인딩됨", () => {
+    const params = ["a", "b"];
+    const clause = keyScopeClause(params, "key_id", { keyId: "k42", groupKeyIds: [] });
+    assert.ok(clause.includes("IS NOT DISTINCT FROM"), "스칼라 IS NOT DISTINCT FROM 필요");
+    assert.ok(clause.includes("::text[]"), "text[] 캐스팅 필요 — int[] 아님");
+    assert.ok(params.includes("k42"), "keyId가 params에 바인딩되어야 한다");
   });
 
-  it("allowedKeyIds=[10,20]이면 ANY 배열 조건 반환", () => {
-    const l      = new InjectableGraphLinker({ db: {}, store: {} });
-    const filter = l._buildKeyFilter([10, 20]);
-    assert.ok(filter.includes("ANY"), `복수 keyId는 ANY 패턴, 실제: ${filter}`);
-    assert.ok(filter.includes("10") && filter.includes("20"));
+  it("groupKeyIds 포함 시 배열 전체가 params에 push됨", () => {
+    const params = [];
+    keyScopeClause(params, "key_id", { keyId: "k1", groupKeyIds: ["k1", "k2", "k3"] });
+    const arrParam = params.find(p => Array.isArray(p));
+    assert.deepStrictEqual(arrParam, ["k1", "k2", "k3"]);
   });
 });

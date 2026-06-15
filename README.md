@@ -165,7 +165,7 @@ Claude.ai Web / ChatGPT 연동은 OAuth를 사용한다. 발급한 API 키(`mmcp
 | 관리 콘솔 | 기억 탐색, 지식 그래프, 통계 대시보드, API 키 그룹/상태 필터, daily-limit 인라인 편집 |
 | OAuth 연동 | RFC 7591 Dynamic Client Registration, Claude.ai / ChatGPT Web 통합 지원 |
 | Workspace 격리 | 같은 키 내에서도 프로젝트·직종·클라이언트 단위로 기억을 분리. `api_keys.default_workspace`로 자동 태깅, 검색 시 자동 필터. |
-| 배치 처리 | `batch_remember`는 multi-row 단일 INSERT(256KB 또는 500행 chunk). `reflect`는 summary/decisions/errors_resolved/new_procedures/open_questions 5카테고리를 단일 배치 호출로 위임. EmbeddingWorker는 큐 묶음을 한 번의 generateBatchEmbeddings + multi-row UPDATE로 처리. |
+| 배치 처리 | `batch_remember`는 multi-row 단일 INSERT(256KB 또는 500행 chunk) + 비동기 큐 워커(BatchRememberWorker)로 임베딩·후처리를 논블로킹 실행. `reflect`는 summary/decisions/errors_resolved/new_procedures/open_questions 5카테고리를 단일 배치 호출로 위임. EmbeddingWorker는 큐 묶음을 한 번의 generateBatchEmbeddings + multi-row UPDATE로 처리. |
 | Consistency Gate | `fragments.morpheme_indexed` 컬럼으로 형태소 인덱스 완료 여부 추적. 미완료 파편은 L3 형태소 검색 경로에서 자동 제외. |
 | Mode preset | `recall-only` / `write-only` / `onboarding` / `audit` JSON preset. `X-Memento-Mode` 헤더 또는 `api_keys.default_mode`로 도구 노출 범위 제한. |
 | Affective tagging | `fragments.affect` 컬럼(neutral / frustration / confidence / surprise / doubt / satisfaction). remember / recall 시 감정 레이블로 필터링. |

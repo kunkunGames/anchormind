@@ -42,6 +42,7 @@ import {
 import { saveAccessStats } from "./lib/tools/index.js";
 import { shutdownPool, getPrimaryPool } from "./lib/tools/db.js";
 import { getMemoryEvaluator } from "./lib/memory/MemoryEvaluator.js";
+import { getBatchRememberWorker } from "./lib/memory/BatchRememberWorker.js";
 
 /** 메트릭 */
 import { recordHttpRequest } from "./lib/metrics.js";
@@ -352,6 +353,10 @@ async function gracefulShutdown(signal) {
 
   const evaluatorDrain = getMemoryEvaluator().stop();
   if (evaluatorDrain) drainPromises.push(evaluatorDrain);
+
+  /** batch_remember 비동기 워커 drain (큐 적재분 유실 방지) */
+  const batchWorkerDrain = getBatchRememberWorker().stop();
+  if (batchWorkerDrain) drainPromises.push(batchWorkerDrain);
 
   /** Phase 4: 형태소 등록 drain (미완료 morpheme fire-and-forget 작업 완료 대기) */
   try {

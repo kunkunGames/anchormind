@@ -132,7 +132,7 @@ describe("ReflectProcessor - decisions", () => {
     const processor = new ReflectProcessor(deps);
 
     const result = await processor.process({
-      decisions: ["TypeScript 채택", "PostgreSQL 선택"],
+      decisions: ["TypeScript를 프로젝트 공식 언어로 채택하고 tsconfig strict 모드 활성화", "PostgreSQL 16을 주 데이터베이스로 선택하고 pgvector 확장 활성화"],
       agentId  : "test-agent",
     });
 
@@ -152,7 +152,7 @@ describe("ReflectProcessor - errors_resolved", () => {
     const processor = new ReflectProcessor(deps);
 
     const result = await processor.process({
-      errors_resolved: ["NPE 해결"],
+      errors_resolved: ["NPE 발생 원인인 null 미검증 경로를 Optional 체이닝으로 수정 완료"],
       agentId        : "test-agent",
     });
 
@@ -171,7 +171,7 @@ describe("ReflectProcessor - new_procedures", () => {
     const processor = new ReflectProcessor(deps);
 
     const result = await processor.process({
-      new_procedures: ["배포 절차 v2"],
+      new_procedures: ["배포 절차 v2: 스테이징 환경 검증 후 프로덕션 롤아웃 순서 확정"],
       agentId       : "test-agent",
     });
 
@@ -208,7 +208,7 @@ describe("ReflectProcessor - session consolidation", () => {
       sessionLinker: {
         consolidateSessionFragments: mock.fn(async () => ({
           summary         : "통합 요약",
-          decisions       : ["통합 결정"],
+          decisions       : ["통합 결정: 마이크로서비스 분리 전략을 다음 분기 로드맵에 반영"],
           errors_resolved : null,
           new_procedures  : null,
           open_questions  : null,
@@ -279,10 +279,10 @@ describe("ReflectProcessor - combined", () => {
 
     const result = await processor.process({
       summary        : ["요약 A", "요약 B"],
-      decisions      : ["결정 1"],
-      errors_resolved: ["에러 1", "에러 2"],
-      new_procedures : ["절차 1"],
-      open_questions : ["질문 1"],
+      decisions      : ["결정 1: Redis 캐시 레이어 도입으로 DB 조회 부하 절감"],
+      errors_resolved: ["에러 1: 커넥션 풀 고갈로 인한 타임아웃 발생 원인 확인 완료", "에러 2: SSL 인증서 갱신 누락으로 외부 API 호출 실패 원인 파악"],
+      new_procedures : ["절차 1: 마이그레이션 실행 전 백업 스냅샷 생성 후 검증 단계 추가"],
+      open_questions : ["질문 1: Redis 클러스터 샤딩 전략을 일관 해싱으로 전환할지 검토 필요"],
       agentId        : "test-agent",
     });
 
@@ -302,7 +302,7 @@ describe("ReflectProcessor - resolutionStatus", () => {
     const processor = new ReflectProcessor(deps);
 
     await processor.process({
-      errors_resolved: ["NPE 수정 완료"],
+      errors_resolved: ["NPE 수정 완료: 사용자 입력 null 체크 로직을 서비스 레이어에 추가"],
       sessionId      : "sess-rs",
       agentId        : "test-agent",
     });
@@ -316,7 +316,7 @@ describe("ReflectProcessor - resolutionStatus", () => {
     const processor = new ReflectProcessor(deps);
 
     await processor.process({
-      open_questions: ["캐시 전략 미확정"],
+      open_questions: ["캐시 전략 미확정: L2 캐시를 Redis Cluster로 교체할지 로컬 Caffeine 유지할지 결정 보류"],
       sessionId     : "sess-rs",
       agentId       : "test-agent",
     });
@@ -334,10 +334,10 @@ describe("ReflectProcessor - sessionId propagation", () => {
 
     await processor.process({
       summary        : ["요약"],
-      decisions      : ["결정"],
-      errors_resolved: ["에러"],
-      new_procedures : ["절차"],
-      open_questions : ["질문"],
+      decisions      : ["결정: GraphQL 대신 REST API를 유지하기로 최종 확정"],
+      errors_resolved: ["에러: 동시 요청 폭증 시 OOM 발생, 힙 크기 제한 설정으로 완화 확인"],
+      new_procedures : ["절차: 주간 DB 인덱스 재빌드 자동화 크론잡 설정 완료"],
+      open_questions : ["질문: gRPC 프로토콜 도입 타당성을 다음 스프린트에서 PoC로 검증 예정"],
       sessionId      : "sess-prop",
       agentId        : "test-agent",
     });

@@ -166,6 +166,10 @@ Gemini and GPT-4o agree on 91.7% of judgments. The only substantial divergence i
 | Evaluation (Gemini API, per condition) | ~15 minutes |
 | Total (3 conditions) | ~3 hours |
 
+## Vector Search HNSW Index Enforcement (v4.6.0)
+
+Since v4.6.0, each vector search transaction automatically applies `SET LOCAL enable_seqscan = off`, `SET LOCAL enable_bitmapscan = off`, and `SET LOCAL hnsw.iterative_scan = relaxed_order`. This blocks the PostgreSQL planner from switching to bitmap scan under `valid_to`/`agent_id` filter conditions, reducing latency from **308ms to 7ms** in affected query patterns. This optimization was added after the benchmark evaluation above, so the figures are not directly comparable; treat it as an operational recall-path latency reference.
+
 ## MorphemeTokenizer Microbenchmark (v4.3.0)
 
 | Metric | Value |

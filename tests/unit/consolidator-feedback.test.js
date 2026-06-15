@@ -3,34 +3,26 @@
  *
  * 작성자: 최진호
  * 작성일: 2026-03-17
- * 수정일: 2026-04-19 (Jest → node:test 이주)
+ * 수정일: 2026-06-15 (feedbackFactor 라이브 계수로 갱신)
  */
 
 import { describe, it } from "node:test";
 import assert           from "node:assert/strict";
 
-import { applyFeedbackSignal } from "../../lib/memory/MemoryConsolidator.js";
+import { feedbackFactor } from "../../lib/memory/consolidate/feedbackFactor.js";
 
-describe("applyFeedbackSignal", () => {
-    it("sufficient=true, relevant=true → importance 상승", () => {
-        const result = applyFeedbackSignal(0.5, true, true);
-        assert.ok(result > 0.5, `expected > 0.5, got ${result}`);
+describe("feedbackFactor", () => {
+    it("relevant=true, sufficient=true → POSITIVE_FACTOR 1.1", () => {
+        assert.strictEqual(feedbackFactor(true, true), 1.1);
     });
 
-    it("relevant=false → importance 하락", () => {
-        const result = applyFeedbackSignal(0.5, false, false);
-        assert.ok(result < 0.5, `expected < 0.5, got ${result}`);
+    it("relevant=false → NEGATIVE_FACTOR 0.85", () => {
+        assert.strictEqual(feedbackFactor(false, false), 0.85);
+        assert.strictEqual(feedbackFactor(false, true),  0.85);
     });
 
-    it("relevant=true, sufficient=false → 소폭 하락", () => {
-        const result = applyFeedbackSignal(0.5, true, false);
-        assert.ok(result < 0.5,  `expected < 0.5, got ${result}`);
-        assert.ok(result > 0.4,  `expected > 0.4, got ${result}`);
-    });
-
-    it("결과는 항상 [0.05, 1.0] 범위 내", () => {
-        assert.ok(applyFeedbackSignal(0.99, true, true)    <= 1.0);
-        assert.ok(applyFeedbackSignal(0.06, false, false)  >= 0.05);
+    it("relevant=true, sufficient=false → MIXED_FACTOR 0.95", () => {
+        assert.strictEqual(feedbackFactor(true, false), 0.95);
     });
 });
 

@@ -16,21 +16,21 @@ import assert                         from "node:assert/strict";
 /** ── 의존성 모킹 ── */
 
 mock.module("../../lib/tools/db.js", {
-    exports: {
+    namedExports: {
         getPrimaryPool:       () => null,
         queryWithAgentVector: async () => ({ rows: [], rowCount: 0 }),
     },
 });
 
 mock.module("../../lib/redis.js", {
-    exports: {
+    namedExports: {
         pushToQueue: async () => undefined,
         redisClient: null,
     },
 });
 
 mock.module("../../lib/logger.js", {
-    exports: {
+    namedExports: {
         logInfo:  () => {},
         logWarn:  () => {},
         logError: () => {},
@@ -39,14 +39,14 @@ mock.module("../../lib/logger.js", {
 });
 
 mock.module("../../config/memory.js", {
-    exports: {
+    namedExports: {
         MEMORY_CONFIG: { gc: { utilityThreshold: 0.15 }, dedup: {} },
     },
 });
 
 /** FragmentStore 모킹 */
 mock.module("../../lib/memory/FragmentStore.js", {
-    exports: {
+    namedExports: {
         FragmentStore: class MockFragmentStore {
             decayImportance()       { return Promise.resolve(undefined); }
             deleteExpired()         { return Promise.resolve(0);         }
@@ -59,7 +59,7 @@ mock.module("../../lib/memory/FragmentStore.js", {
 
 /** FragmentIndex 모킹 */
 mock.module("../../lib/memory/FragmentIndex.js", {
-    exports: {
+    namedExports: {
         getFragmentIndex: () => ({
             pruneKeywordIndexes: async () => undefined,
         }),
@@ -68,7 +68,7 @@ mock.module("../../lib/memory/FragmentIndex.js", {
 
 /** EmbeddingWorker 모킹 */
 mock.module("../../lib/memory/EmbeddingWorker.js", {
-    exports: {
+    namedExports: {
         EmbeddingWorker: class MockEmbeddingWorker {
             processOrphanFragments() { return Promise.resolve(0); }
         },
@@ -77,7 +77,7 @@ mock.module("../../lib/memory/EmbeddingWorker.js", {
 
 /** ContradictionDetector 모킹 */
 mock.module("../../lib/memory/ContradictionDetector.js", {
-    exports: {
+    namedExports: {
         ContradictionDetector: class MockContradictionDetector {
             resetCheckedPairs()             {}
             detectContradictions()          { return Promise.resolve({ found: 0, nliResolved: 0, nliSkipped: 0 }); }
@@ -89,7 +89,7 @@ mock.module("../../lib/memory/ContradictionDetector.js", {
 
 /** ConsolidatorGC 모킹 */
 mock.module("../../lib/memory/ConsolidatorGC.js", {
-    exports: {
+    namedExports: {
         ConsolidatorGC: class MockConsolidatorGC {
             generateFeedbackReport() { return Promise.resolve(false); }
             collectStaleFragments()  { return Promise.resolve([]);    }
@@ -104,7 +104,7 @@ mock.module("../../lib/memory/ConsolidatorGC.js", {
 
 /** GraphLinker 모킹 */
 mock.module("../../lib/memory/GraphLinker.js", {
-    exports: {
+    namedExports: {
         GraphLinker: class MockGraphLinker {
             retroLink() { return Promise.resolve({ linksCreated: 0 }); }
         },

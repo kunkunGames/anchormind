@@ -2,7 +2,9 @@
 
 AI 에이전트가 Memento MCP 기억 서버를 최대 효율로 활용하기 위한 기술 레퍼런스.
 
-## 현재 버전: v4.5.0
+## 현재 버전: v4.6.0
+
+v4.6.0은 `batch_remember` 비동기 모드 opt-in·배치 전용 연결 풀·내부 중복 정리 릴리즈다. `async: true` 지정 시 선검증 후 Redis 큐 적재, `{async, accepted, rejected, jobId}`를 즉시 반환하며 `BatchRememberWorker`가 본처리한다. 기본 `async: false`로 기존 동기 동작은 불변이고, Redis 비활성 시 동기 폴백이 작동한다. 배치 작업은 `getBatchPool`(`application_name='memento-mcp:batch'`) 전용 풀로 분리되어 배치 풀 통계 메트릭이 수집된다. 내부적으로 키 스코프 조회가 `keyScopeClause` 헬퍼로 통일되고, 피드백 보정 계수가 `feedbackFactor` 순수 함수로 단일화됐다.
 
 v4.5.0은 `splitLongFragments` stage에 two-phase gate-then-commit·분할 품질 게이트(최소 길이 20자·대체 문자·CJK 혼입·대명사 시작 reject)·실패 backoff(`split_attempt_failed_at`)·분할 전용 provider 체인(`MEMENTO_SPLIT_LLM_*`)을 더하고, `FragmentGC`에 부모 tombstone된 split 자식 정리(branch-2)를 추가한 릴리즈다. 통과 자식이 `fragmentSplit.minItems`(기본 2) 미만이면 DB 커밋 없이 backoff만 기록하며, skip 사유는 `memento_consolidate_split_skipped_total{reason}` 메트릭에 누적된다.
 
@@ -58,13 +60,13 @@ v3.2.x 변경 요약은 다음과 같다.
 - v3.2.1: reasoning 모델 응답의 `<think>` 블록 사전 제거를 `parse-json.js`에 도입. 본 SKILL 상단의 기억 도구 사용 규칙 섹션이 추가됐다.
 - v3.2.0: `BatchRememberProcessor` 도입, `EmbeddingWorker`/`MorphemeIndex` 배치 경로 도입, `BATCH_DATABASE_URL` 분리, migration-035 적용.
 
-v3.1.1은 LLM Provider 체인 동시성 제어(concurrency semaphore + 429 cooldown)를 추가한 patch 릴리즈다. Ollama Cloud, fatherless 프록시 등에서 동시 요청 버스트로 인한 HTTP 429 연쇄 실패를 차단한다. 기본값으로 활성화되며 `LLM_CONCURRENCY_ENABLED=false`로 끌 수 있다. v3.1.0 기반 기능(`_meta.*` 경로, `scripts/post-migrate-flexible-embedding-dims.js`)은 그대로 유지된다.
+v3.1.1은 LLM Provider 체인 동시성 제어(concurrency semaphore + 429 cooldown)를 추가한 patch 릴리즈다. Ollama Cloud 및 외부 LLM 프록시 등에서 동시 요청 버스트로 인한 HTTP 429 연쇄 실패를 차단한다. 기본값으로 활성화되며 `LLM_CONCURRENCY_ENABLED=false`로 끌 수 있다. v3.1.0 기반 기능(`_meta.*` 경로, `scripts/post-migrate-flexible-embedding-dims.js`)은 그대로 유지된다.
 
 ### LLM 동시성 제어 (v3.1.1)
 
 - Provider별 세마포어: chain key(`provider|baseUrl|model`) 기준 슬롯 한도 관리. 한도 초과 시 대기, 30초 타임아웃 초과 시 다음 fallback provider로 자동 전환.
 - 429 쿨다운: HTTP 429 수신 시 해당 provider가 500-2000ms 랜덤 지터 동안 `isAvailable()=false` 반환. 체인 스킵 후 재진입.
-- 내장 기본 한도: `ollama=16`, `openai@fatherless|gemma-4-31B-it=3`, `openai@xiaomi|mimo-v2-pro=8`, `*-cli=1`, 기타 provider=10.
+- 내장 기본 한도: `ollama=16`, `openai@xiaomi|mimo-v2-pro=8`, `*-cli=1`, 기타 provider=10.
 - 환경 변수:
   - `LLM_CONCURRENCY_ENABLED=true|false` (기본 true, kill switch)
   - `LLM_CONCURRENCY_WAIT_MS=30000` (슬롯 대기 타임아웃 ms)
@@ -131,7 +133,7 @@ recall / context 응답 메타데이터는 `_meta.searchEventId` / `_meta.hints`
 | 발화 신호 | 예시 표현 | 의무 호출 |
 |-|-|-|
 | 명시적 과거 참조 | "이전에", "저번에", "지난번", "전에 했던" | `recall(text=관련 내용, includeContext=true)` |
-| 프로젝트명 등장 | "memento-mcp", "RealPT", "nerdvana" 등 고유 식별자 | `recall(topic=프로젝트명, contextText=현재 작업 요약)` |
+| 프로젝트명 등장 | "memento-mcp", "RealPT", "my-project" 등 고유 식별자 | `recall(topic=프로젝트명, contextText=현재 작업 요약)` |
 | 에러·실패·이상 동작 보고 | "에러 떴어", "안 돼", "실패했어", "터졌어" | `recall(type="error", keywords=[에러 키워드])` |
 | 설정·환경변수·포트 언급 | "포트 뭐였지", "설정 어떻게 했지", "키 어디 있지" | `recall(type="fact", keywords=[설정명])` |
 | 절차·빌드·배포 질문 | "어떻게 배포하지", "빌드 절차", "테스트 돌리는 법" | `recall(type="procedure", keywords=[프로젝트명, "deploy"])` |
@@ -571,7 +573,7 @@ reflect 규칙:
 2. 디바이스/호스트 구분이 가능한 경우: hostname 포함
    - 작업 디렉토리 경로에서 추출 (예: /srv/apps/paysvc -> "paysvc")
    - 환경변수, 시스템 정보에서 추출 (예: os.hostname())
-   - 예: `keywords: ["memento-mcp", "nerdvana", "oauth"]`
+   - 예: `keywords: ["memento-mcp", "my-host", "oauth"]`
 
 3. reflect의 summary/decisions/errors_resolved에도 동일 규칙 적용
 
@@ -697,7 +699,7 @@ remember(
   content="OAuth 구현 과정: DCR 엔드포인트 추가 -> Claude.ai가 client_id=Authorization을 보내는 버그 발견 -> auto-register로 우회 -> redirect_uri를 origin 기반으로 변경하여 ChatGPT connector 동적 경로 대응",
   type="episode",
   topic="memento-mcp",
-  keywords=["memento-mcp", "oauth", "DCR", "nerdvana"],
+  keywords=["memento-mcp", "oauth", "DCR", "my-host"],
   contextSummary="2026-04-02 세션에서 OAuth MCP 준수 구현. Claude.ai/ChatGPT 연동 완료."
 )
 ```
@@ -810,11 +812,11 @@ curl 응답 검증 체크:
 ### 구성 예시
 
 ```
-그룹: nerdvana
-  +-- nerdvana-claude (Claude Code용)
-  +-- nerdvana-cursor (Cursor용)
-  +-- nerdvana-gpt (ChatGPT용)
-  +-- nerdvana-GC (기존 기억 보관용)
+그룹: team-a
+  +-- team-a-claude (Claude Code용)
+  +-- team-a-cursor (Cursor용)
+  +-- team-a-gpt (ChatGPT용)
+  +-- team-a-GC (기존 기억 보관용)
 ```
 
 이 구성에서 Claude Code에서 저장한 기억을 Cursor에서도 recall 가능.
@@ -822,7 +824,7 @@ curl 응답 검증 체크:
 ### 키워드로 출처 구분
 
 같은 그룹 내에서도 어떤 플랫폼/디바이스에서 생긴 기억인지 구분하려면:
-- keywords에 플랫폼명 포함: `["memento-mcp", "claude-code", "nerdvana"]`
+- keywords에 플랫폼명 포함: `["memento-mcp", "claude-code", "my-host"]`
 - recall 시 플랫폼 필터: `recall(keywords=["claude-code"])`
 
 ## 도구 레퍼런스 (17개)
@@ -870,7 +872,10 @@ RBAC default-deny: 도구 맵에 등록되지 않은 도구를 호출하면 `"Ac
 | 이름 | 타입 | 필수 | 설명 |
 |------|------|------|------|
 | fragments | array | O | [{content, topic, type, importance?, keywords?}] 최대 200건 |
+| async | boolean | - | true 시 파이어앤포겟 비동기 모드. 선검증 후 Redis 큐 적재, {async, accepted, rejected, jobId} 즉시 반환. 기본 false(동기). Redis 비활성 시 동기 폴백. |
 | agentId | string | - | 에이전트 ID |
+
+async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기를 피하려면 `async: true`. 단 즉시 받는 것은 `accepted` 수와 `jobId`뿐이며 per-fragment id는 반환되지 않고, 파편은 워커 처리 후에 recall 가능(즉시 아님, eventual)하다. 재시도 안전이 필요하면 각 항목에 `idempotencyKey`를 넣는다. 소수 저장이나 직후 해당 파편을 곧바로 참조해야 하는 경우는 기본 동기 모드(async 생략)를 쓴다.
 
 ### recall
 
@@ -889,8 +894,8 @@ RBAC default-deny: 도구 맵에 등록되지 않은 도구를 호출하면 `"Ac
 | linkRelationType | string | - | 연결 관계 필터 (related, caused_by, resolved_by, part_of, contradicts) |
 | threshold | number | - | similarity 임계값 0~1 |
 | includeSuperseded | boolean | - | 만료 파편 포함. 기본 false. |
-| asOf | string | - | ISO 8601. 특정 시점 기준 유효 파편만. |
-| timeRange | object | - | {from, to} 시간 범위. |
+| asOf | string | - | ISO 8601. 해당 시점에 가까운 파편을 상위로 올리는 시간 근접 랭킹 기준(anchorTime)으로만 작동. 주의: 그 시점에 유효했던 버전을 복원하는 bitemporal as-of 필터가 아니며, 과거 시점 스냅샷 조회는 미구현. 특정 기간의 파편을 실제로 한정하려면 timeRange를 쓴다. |
+| timeRange | object | - | {from, to} 생성시각(created_at) 기준 시간창 필터. ISO 8601과 한국어 자연어("3일 전","지난 주","오늘") 모두 지원. 지정 시 시간 검색 경로가 동작하고 RRF에서 시간 근접 가중이 부스트된다. |
 | cursor | string | - | 페이지네이션 커서 |
 | pageSize | number | - | 기본 20, 최대 50 |
 | excludeSeen | boolean | - | context()에서 주입된 파편 제외. 기본 true. |
@@ -1310,7 +1315,7 @@ remember(
   content="nginx SSL 인증서 갱신 실패 조사 시작. certbot renew 실행 시 403 에러 발생.",
   type="episode",
   topic="nginx",
-  keywords=["nginx", "ssl", "certbot", "nerdvana"],
+  keywords=["nginx", "ssl", "certbot", "my-host"],
   caseId="debug-nginx-ssl-2026-04-05",
   goal="certbot SSL 인증서 갱신 403 에러 해결",
   phase="planning",

@@ -164,6 +164,7 @@ See [integration guides](docs/getting-started/) for platform-specific setup.
 | Admin Console | Memory explorer, knowledge graph, statistics dashboard, API key group/status filters, inline daily-limit editing |
 | OAuth Integration | RFC 7591 Dynamic Client Registration, Claude.ai Web and ChatGPT integration support |
 | **Workspace isolation** | Partition memories by project, role, or client within the same API key. Auto-tag via `api_keys.default_workspace`, auto-filter on recall. |
+| **Batch async mode** | `batch_remember` persists fragments via multi-row INSERT and offloads embedding and post-processing to a non-blocking async worker (BatchRememberWorker). |
 
 ### What's New in v3.0.0 — CLI/API Enhancement Phase 2 (folded from v2.12.0)
 

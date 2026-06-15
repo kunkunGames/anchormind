@@ -1,7 +1,7 @@
 # Architecture
 
 작성자: 최진호
-수정일: 2026-05-19
+수정일: 2026-06-16
 
 ## 시스템 구조
 
@@ -22,7 +22,7 @@ server.js  (HTTP 서버)
     ├── GET  /.well-known/oauth-authorization-server
     └── GET  /.well-known/oauth-protected-resource
     │
-    ├── lib/jsonrpc.js        JSON-RPC 2.0 파싱 및 메서드 디스패치
+    ├── lib/jsonrpc.js        JSON-RPC 2.0 파싱 및 메서드 디스패치. `dispatchJsonRpc`는 METHOD_MAP 객체로 메서드명→핸들러를 정적 매핑
     ├── lib/tool-registry.js  18개 기억 도구 등록 및 라우팅
     │
     └── lib/memory/
@@ -33,7 +33,7 @@ server.js  (HTTP 서버)
             │   ├── MemoryReflector.js    reflect() 전담 (~89줄). session 요약→파편 변환
             │   └── MemoryLinker.js       link()/forget()/amend() 전담 (~80줄)
             ├── read/                     검색 레이어 모듈 (v3.7.0 서브디렉토리 분할)
-            │   ├── FragmentSearch.js     3계층 검색 조율 (구조적: L1→L2, 시맨틱: L1→L2‖L3 RRF 병합). 구버전 stub re-export: lib/memory/FragmentSearch.js
+            │   ├── FragmentSearch.js     3계층 검색 조율 (구조적: L1→L2, 시맨틱: L1→L2‖L3 RRF 병합). `_executeSearch`는 `_buildTextRRF` (text 파라미터 있을 때 L2+L3 병렬 RRF) / `_buildFallbackCombined` (text 없을 때 L1+L2 전용) 두 내부 메서드로 분해. 구버전 stub re-export: lib/memory/FragmentSearch.js
             │   ├── CaseRecall.js         caseMode: true 경로 전담. case_id별 (goal, events[], outcome) 트리플 반환
             │   ├── LinkedFragmentLoader.js 연결 파편 일괄 로드 (1-hop 이웃 배치 조회)
             │   ├── RecallSuggestionEngine.js recall 결과 분석 후 _suggestion 메타 생성
@@ -55,14 +55,16 @@ server.js  (HTTP 서버)
             │   ├── SpreadingActivation.js contextText 기반 비동기 활성화 전파 (ACT-R 모델, keywords GIN seed → 1-hop 그래프 확산, 10분 TTL 캐시). 구버전 stub re-export: lib/memory/SpreadingActivation.js
             │   ├── CaseRewardBackprop.js  case verification 이벤트 → 증거 파편 importance 원자적 역전파. MEMENTO_CASE_BACKPROP_ENABLED 환경변수 미설정 시 즉시 반환. 구버전 stub re-export: lib/memory/CaseRewardBackprop.js
             │   └── NLIClassifier.js       NLI 기반 모순 분류기 (mDeBERTa ONNX, CPU). 구버전 stub re-export: lib/memory/NLIClassifier.js
-            ├── ContextBuilder.js         context() 로직 전담. Core/Working/Anchor Memory 조합 컨텍스트 생성
+            ├── ContextBuilder.js         context() 로직 전담. `build()` 내부에서 `#loadCoreMemory` / `#loadWorkingMemory` / `#loadAnchorMemory` / `#loadLearningFragments` / `#buildInjectionLines` / `#buildStructuredResponse` 6개 비공개 메서드로 분해
             ├── ReflectProcessor.js       reflect() 로직 전담. summary→파편 변환, episode 생성, Working Memory 정리
-            ├── BatchRememberProcessor.js batchRemember() 로직 전담. Phase A(검증)→B(INSERT)→C(후처리) 3단계
+            ├── BatchRememberProcessor.js batchRemember() 로직 전담. Phase A(검증)→B(INSERT)→C(후처리) 3단계. `async: true` 파라미터로 비동기 opt-in 가능: 선검증 후 Redis 큐(`memento:batch_remember_queue`)에 job을 적재하고 즉시 반환. Redis 미설정 시 동기 경로 폴백. 워커(BatchRememberWorker)가 기존 INSERT 경로로 소비
+            ├── BatchRememberWorker.js    batch_remember 비동기 큐 워커. `memento:batch_remember_queue` Redis 큐 폴링 → BatchRememberProcessor 동기 경로로 실행. `getBatchRememberWorker()` 싱글톤 팩토리. server.js `gracefulShutdown`에서 `stop()` drain 대기로 안전 종료
             ├── QuotaChecker.js           API 키 파편 할당량 검사 (fragment_limit 기반)
             ├── RememberPostProcessor.js  remember() 후처리 파이프라인 (임베딩/형태소/링크/assertion/시간링크/평가큐/ProactiveRecall 포함)
             ├── FragmentFactory.js        파편 생성, 유효성 검증, PII 마스킹
             ├── FragmentStore.js          PostgreSQL CRUD 파사드 (FragmentReader + FragmentWriter 위임)
-            ├── FragmentReader.js         파편 읽기. `getById(id, agentId, keyId, groupKeyIds)` — groupKeyIds 파라미터로 그룹 소속 키의 파편도 단일 호출로 조회. `getByIds`, `getHistory`, `searchByKeywords`, `searchBySemantic`
+            ├── FragmentReader.js         파편 읽기. `getById(id, agentId, keyId, groupKeyIds)` — groupKeyIds 파라미터로 그룹 소속 키의 파편도 단일 호출로 조회. `getByIds`, `getHistory`, `searchByKeywords`, `searchBySemantic`, `findCaseIdBySessionTopic`, `findErrorFragmentsBySessionTopic`
+            ├── keyScope.js               `keyScopeClause(params, column, { keyId, groupKeyIds })` 공유 헬퍼. key_id 범위 WHERE 절 생성. FragmentReader.getById / findCaseIdBySessionTopic / findErrorFragmentsBySessionTopic / GraphLinker / LinkStore / HistoryReconstructor / reconstruct.js에서 공유 사용
             ├── FragmentIndex.js          Redis L1 인덱스 관리, getFragmentIndex() 싱글톤 팩토리
             ├── GraphLinker.js            임베딩 완료 이벤트 구독 자동 관계 생성 + 소급 링킹 + Hebbian co-retrieval 링킹
             ├── MemoryEvaluator.js        비동기 Gemini CLI 품질 평가 워커 (싱글턴)
@@ -150,7 +152,7 @@ lib/
 lib/handlers/
 ├── _common.js         getAllowedOrigin, setWorkerRefs, recordConsolidateRun (공통 유틸리티)
 ├── health-handler.js  handleHealth, handleMetrics
-├── mcp-handler.js     handleMcpPost/Get/Delete (Streamable HTTP). `injectSessionContext(msg, ctx)` — tools/call 메시지의 arguments에 서버 제어 컨텍스트(_sessionId, _keyId, _groupKeyIds, _permissions, _defaultWorkspace) 주입. 클라이언트가 전달한 동명 필드는 서버값으로 덮어쓰기하여 위조 차단
+├── mcp-handler.js     handleMcpPost/Get/Delete (Streamable HTTP). handleMcpPost는 내부적으로 `_resolveExistingSession` / `_createInitializeSession` / `_validateProtocolVersion` / `_dispatchAndRespond` 4개 비공개 함수로 분해된다. `injectSessionContext(msg, ctx)` — tools/call 메시지의 arguments에 서버 제어 컨텍스트(_sessionId, _keyId, _groupKeyIds, _permissions, _defaultWorkspace) 주입. 클라이언트가 전달한 동명 필드는 서버값으로 덮어쓰기하여 위조 차단
 ├── sse-handler.js     handleLegacySseGet/Post (Legacy SSE)
 └── oauth-handler.js   OAuth 5개 엔드포인트 (ServerMetadata, ResourceMetadata, Register, Authorize, Token)
 
@@ -483,7 +485,7 @@ erDiagram
 
 인덱스 목록: content_hash(UNIQUE), topic(B-tree), type(B-tree), keywords(GIN), importance DESC(B-tree), created_at DESC(B-tree), agent_id(B-tree), linked_to(GIN), (ttl_tier, created_at)(B-tree), source(B-tree), verified_at(B-tree), is_anchor WHERE TRUE(부분 인덱스), valid_from(B-tree), (topic, type) WHERE valid_to IS NULL(부분 인덱스), id WHERE valid_to IS NULL(부분 UNIQUE). `idx_fragments_key_workspace` (key_id, workspace) WHERE valid_to IS NULL (복합 부분 인덱스 — API 키 + workspace 동시 필터 최적화), `idx_fragments_workspace` (workspace) WHERE workspace IS NOT NULL AND valid_to IS NULL (workspace 단독 전체 조회용 부분 인덱스).
 
-HNSW 벡터 인덱스는 `embedding IS NOT NULL` 조건부 인덱스로 생성된다. 파라미터: m=16(이웃 연결 수), ef_construction=128(인덱스 구축 탐색 깊이), 거리 함수 vector_cosine_ops. ef_search=80 (세션 레벨 SET LOCAL 적용).
+HNSW 벡터 인덱스는 `embedding IS NOT NULL` 조건부 인덱스로 생성된다. 파라미터: m=16(이웃 연결 수), ef_construction=128(인덱스 구축 탐색 깊이), 거리 함수 vector_cosine_ops. ef_search=80 (세션 레벨 SET LOCAL 적용). 벡터 검색 실행 직전 `SET LOCAL enable_seqscan = off`, `SET LOCAL enable_bitmapscan = off`, `SET LOCAL hnsw.iterative_scan = relaxed_order`를 세션 단위로 강제하여 HNSW 인덱스 경로를 보장한다 (`lib/tools/db.js` queryWithAgentVector).
 
 ### fragment_links
 
@@ -1274,6 +1276,12 @@ lib/memory/
 
 기존 `lib/memory/FragmentSearch.js` 등 구버전 경로는 각 서브디렉토리의 실제 모듈을 re-export하는 stub 파일로 유지되어 외부 임포트 경로를 변경할 필요가 없다.
 
+### keyScopeClause 공유 헬퍼 (lib/memory/keyScope.js)
+
+`keyScopeClause(params, column, { keyId, groupKeyIds })` — key_id 범위 WHERE 절을 생성하는 단일 공유 헬퍼. master 키(`keyId = null`)이면 조건을 생략하고, API 키이면 `column = $N OR column IN (groupKeyIds)` 형태의 파라미터 바인딩을 params 배열에 push한다. 전역(`key_id IS NULL`) 파편은 의도적으로 매칭하지 않는다(FragmentReader.getById 정답형 일치).
+
+사용 사이트: `FragmentReader.getById` / `findCaseIdBySessionTopic` / `findErrorFragmentsBySessionTopic`, `GraphLinker` (소급 링킹·Co-retrieval), `LinkStore` (GraphNeighborSearch 시드 키 필터), `HistoryReconstructor`, `lib/tools/reconstruct.js`.
+
 ### SearchScope 계약 (v4.0.0)
 
 `lib/memory/read/SearchScope.js`. 검색 레이어 간 필터 조건을 단일 객체로 캡슐화한다.
@@ -1337,9 +1345,23 @@ Primary Pool (getPrimaryPool)          Batch Pool (getBatchPool)
 
 `BATCH_DATABASE_URL` 환경변수를 설정하면 별도 DB 인스턴스로 라우팅하여 I/O 완전 분리가 가능하다. 미설정 시 동일 DB에 별도 풀로 연결된다.
 
-BatchRememberProcessor 측의 `this._getPool()` 분기에서 `getBatchPool()`을 우선 선택하도록 연결하는 작업은 후속 PR에서 수행 예정이다. 현 시점에서 BatchRememberProcessor는 여전히 Primary pool을 사용한다.
+BatchRememberProcessor는 `_getPool()` 내부에서 `getBatchPool()`을 기본 선택한다 (`lib/memory/BatchRememberProcessor.js`). 풀 오버라이드가 없으면 항상 Batch pool로 라우팅된다.
+
+스케줄러(`lib/scheduler.js`)가 1분 간격으로 Batch pool 통계를 수집한다.
 
 관련 코드: `lib/tools/db.js` line 67~121.
+
+### batch_remember 비동기 처리
+
+`batch_remember` 도구는 `async: true` 파라미터로 비동기 opt-in을 지원한다.
+
+흐름:
+1. 선검증(Phase A) — content null·type 누락 등 거부 항목 즉시 반환
+2. Redis 큐(`memento:batch_remember_queue`) 적재 — job 직렬화 후 `pushToQueue` 호출
+3. `{ async: true, accepted, rejected, jobId }` 즉시 반환
+4. BatchRememberWorker가 백그라운드에서 큐 폴링 → BatchRememberProcessor 동기 경로로 INSERT 처리
+
+Redis 미설정(stub 상태)이면 async 플래그를 무시하고 동기 경로로 폴백한다. 서버 종료 시 `gracefulShutdown`이 `getBatchRememberWorker().stop()`으로 worker drain을 대기한다 (`server.js`).
 
 ### migration-035: fragments.morpheme_indexed
 

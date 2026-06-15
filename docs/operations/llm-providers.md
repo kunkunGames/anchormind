@@ -53,6 +53,28 @@ CLI provider(`gemini-cli`, `codex-cli`, `copilot-cli`, `qwen-cli`)도 `LLM_FALLB
 | cohere | 필수 | 필수 | 선택 | https://api.cohere.ai/v1 |
 | zai | 필수 | 필수 | 선택 | https://open.bigmodel.cn/api/paas/v4 |
 
+## 동시성 슬롯 (LLM_CONCURRENCY)
+
+`dispatchChain` 내부에서 provider별 세마포어로 동시 호출 수를 제한한다. `LLM_CONCURRENCY` JSON 객체로 chainKey(또는 provider 이름) 단위 상한을 지정한다.
+
+기본값 (`lib/config.js DEFAULT_LLM_CONCURRENCY`):
+
+| chainKey / provider | 기본 슬롯 수 |
+|-|-|
+| gemini-cli | 1 |
+| codex-cli | 1 |
+| copilot-cli | 1 |
+| qwen-cli | 1 |
+| opencode-cli | 1 |
+| ollama | 16 |
+
+미설정 항목은 상한 없음(세마포어 미적용). `LLM_CONCURRENCY_ENABLED=false`로 세마포어 전체 우회 가능. 슬롯 대기 타임아웃은 `LLM_CONCURRENCY_WAIT_MS`(기본 30000ms).
+
+재정의 예시:
+```bash
+LLM_CONCURRENCY='{"gemini-cli":2,"ollama":8}'
+```
+
 ## Circuit Breaker
 
 연속 실패 시 provider 자동 격리:

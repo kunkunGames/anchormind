@@ -72,6 +72,11 @@ export const MEMORY_CONFIG = {
     retryDelayMs: 2000,
     queueKey    : "memento:embedding_queue"
   },
+  /** batch_remember 비동기 워커 설정 */
+  batchRememberWorker: {
+    intervalMs: 1000,
+    queueKey  : "memento:batch_remember_queue"
+  },
   /** 컨텍스트 주입 설정 */
   contextInjection: {
     maxCoreFragments   : 15,

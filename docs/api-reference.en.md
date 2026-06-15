@@ -138,7 +138,7 @@ Request:
 POST /session/rotate HTTP/1.1
 Authorization: Bearer <API key or master key>
 Mcp-Session-Id: <target sessionId>
-Origin: https://example.nerdvana.kr
+Origin: https://example.com
 Content-Type: application/json
 
 { "reason": "suspected_leak" }
@@ -561,6 +561,21 @@ Store multiple fragments at once (for bulk memory input). Batch INSERTs up to 20
 | fragments | object[] | Y | Array of fragments to store (max 200). Each item includes content (string, required), topic (string, required), type (string, required), importance (number), keywords (string[]), workspace (string), idempotencyKey (string, max 128 chars). |
 | workspace | string | - | Batch default workspace. Used for individual fragments without a workspace. Key's default_workspace applied if not specified. |
 | agentId | string | - | Agent ID (for RLS isolation) |
+| stream | boolean | - | When true, sends text/event-stream progress events. A progress event is emitted at each processing phase (Phase A/B/C), and the final response is received via a result event. Also activated when the client sends an Accept: text/event-stream header. |
+| async | boolean | - | When true, fire-and-forget (async) mode (default false). Performs only schema validation, content_hash dedup, and quota pre-check synchronously, then enqueues accepted fragments to a Redis queue and immediately returns `{async: true, accepted: N, rejected: N, jobId: "..."}`. The actual INSERT is handled by the background worker (BatchRememberWorker). Falls back to synchronous mode when Redis is disabled (REDIS_ENABLED=false). |
+
+### async=true Response Example
+
+```json
+{
+  "async": true,
+  "accepted": 5,
+  "rejected": 1,
+  "jobId": "batch-1750000000000-a1b2c3d4"
+}
+```
+
+In synchronous mode (default), a `results[]` array is returned. `jobId` is a tracking identifier visible in server logs. No automatic retry on queue loss.
 
 ---
 
@@ -780,7 +795,7 @@ Search fragments by exact matching (unlike recall's semantic search, uses conten
 Return only id, content, importance to reduce token usage:
 
 ```bash
-curl -X POST https://pmcp.nerdvana.kr/mcp \
+curl -X POST https://memento.example.com/mcp \
   -H "Authorization: Bearer $MEMENTO_KEY" \
   -H "Mcp-Session-Id: $SESSION" \
   -H "Content-Type: application/json" \
@@ -867,7 +882,7 @@ Response:
 |-|-|-|
 | `MEMENTO_REMEMBER_ATOMIC` | `false` | When `true`, the remember path switches to `_rememberAtomic`. Quota re-validation and INSERT are handled atomically within a single BEGIN/COMMIT transaction using `SELECT api_keys FOR UPDATE`. `_runPolicyGate` runs identically on both paths, so the `validation_warnings` format is unchanged. |
 | `MEMENTO_CASE_BACKPROP_ENABLED` | `false` | When `true`, amending a fragment with a case_id (specifically changing resolutionStatus) triggers importance backpropagation to all fragments sharing the same caseId. Exported as the `CASE_BACKPROP_ENABLED` constant in `lib/config.js`. Boosts activation scores of related fragments after case resolution, improving subsequent recall precision. |
-| `MEMENTO_STORAGE` | `pgvector` | Selects the storage adapter. `pgvector` (default, production PgVectorStore) or `sqlite-vec` (planned v4.1 stub, SqliteVecStore). The `transaction(fn)` interface is preserved across adapters, so write-path concurrency semantics remain consistent. |
+| `MEMENTO_STORAGE` | `pgvector` | Selects the storage adapter. `pgvector` (default, production PgVectorStore) or `sqlite-vec` (SqliteVecStore). The `transaction(fn)` interface is preserved across adapters, so write-path concurrency semantics remain consistent. |
 | `MEMENTO_SYMBOLIC_POLICY_RULES` | `false` | When `true`, `_runPolicyGate` evaluates PolicyRules soft gates and accumulates failed rule names into `validation_warnings`. |
 
 ---

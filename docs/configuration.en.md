@@ -101,6 +101,30 @@ Automatic fallback to 15 providers beyond Gemini CLI. Existing behavior is fully
 
 When REDIS_ENABLED=true, state is stored in Redis; otherwise in-memory.
 
+##### LLM Concurrency Control
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| LLM_CONCURRENCY_ENABLED | true | When false, bypasses the semaphore and sends requests to all providers without concurrency limits |
+| LLM_CONCURRENCY_WAIT_MS | 30000 | Slot wait timeout (ms). Request fails if no slot becomes available within this duration |
+| LLM_CONCURRENCY | (see below) | JSON object. Slot limit keyed by chainKey (`provider|baseUrl|model`) or provider name |
+
+`LLM_CONCURRENCY` defaults (`DEFAULT_LLM_CONCURRENCY`):
+
+```json
+{
+  "ollama": 16,
+  "openai|https://token-plan-sgp.xiaomimimo.com/v1|mimo-v2-pro": 8,
+  "gemini-cli": 1,
+  "copilot-cli": 1,
+  "codex-cli": 1,
+  "qwen-cli": 1,
+  "opencode-cli": 1
+}
+```
+
+The default slot limit for providers not listed is 10. When `LLM_CONCURRENCY` is set, it is merged with the defaults.
+
 ##### Token Usage Cap
 
 | Variable | Default | Description |
@@ -172,6 +196,20 @@ POSTGRES_* prefixes take precedence over DB_* prefixes. Both formats can be mixe
 | DB_IDLE_TIMEOUT_MS | Idle connection return timeout ms. Default 30000 |
 | DB_CONN_TIMEOUT_MS | Connection acquisition timeout ms. Default 10000 |
 | DB_QUERY_TIMEOUT | Query timeout ms. Default 30000 |
+| BATCH_DATABASE_URL | (none, optional) Dedicated PostgreSQL URL for batchPool. Falls back to the primary `DATABASE_URL` when unset. batchPool handles heavy transactions (multi-row INSERTs) in a dedicated pool to prevent starvation of recall requests. Pool size is `primaryMax × 0.3` (minimum 2). `application_name='memento-mcp:batch'` is set for pg_stat_activity monitoring. Pool size and application_name are determined internally and cannot be overridden via environment variables. |
+
+### batch_remember Async Mode
+
+`batch_remember` tool requests with `async=true` are processed asynchronously through a Redis queue (`memento:batch_remember_queue`).
+
+| Item | Value |
+|-|-|
+| Queue key | `memento:batch_remember_queue` |
+| Worker polling interval | 1000ms |
+| Fallback when Redis disabled | Automatically falls back to synchronous mode |
+| Automatic retry | None (no retry on queue loss) |
+
+This feature operates asynchronously only when `REDIS_ENABLED=true`. When `REDIS_ENABLED=false`, passing `async=true` still processes synchronously.
 
 ### Redis
 

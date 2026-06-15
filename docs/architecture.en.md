@@ -19,7 +19,7 @@ server.js  (HTTP server)
     +-- GET  /.well-known/oauth-authorization-server
     +-- GET  /.well-known/oauth-protected-resource
     |
-    +-- lib/jsonrpc.js        JSON-RPC 2.0 parsing and method dispatch
+    +-- lib/jsonrpc.js        JSON-RPC 2.0 parsing and method dispatch. `dispatchJsonRpc` uses a METHOD_MAP object for static method-name-to-handler routing
     +-- lib/tool-registry.js  18 memory tool registration and routing
     |
     +-- lib/memory/
@@ -30,7 +30,7 @@ server.js  (HTTP server)
             |   +-- MemoryReflector.js    Dedicated reflect() (~89 lines). session summary->fragment conversion
             |   +-- MemoryLinker.js       Dedicated link()/forget()/amend() (~80 lines)
             +-- read/                     Search layer modules (v3.7.0 subdirectory split)
-            |   +-- FragmentSearch.js     3-layer search orchestration (structural: L1->L2, semantic: L1->L2||L3 RRF merge). Legacy stub re-export: lib/memory/FragmentSearch.js
+            |   +-- FragmentSearch.js     3-layer search orchestration (structural: L1->L2, semantic: L1->L2||L3 RRF merge). `_executeSearch` decomposes into `_buildTextRRF` (L2+L3 parallel RRF when text parameter present) / `_buildFallbackCombined` (L1+L2 only when no text). Legacy stub re-export: lib/memory/FragmentSearch.js
             |   +-- CaseRecall.js         Dedicated caseMode: true path. Returns (goal, events[], outcome) triple per case_id
             |   +-- LinkedFragmentLoader.js Bulk linked fragment load (1-hop neighbor batch query)
             |   +-- RecallSuggestionEngine.js Analyzes recall results and generates _suggestion meta field
@@ -51,14 +51,16 @@ server.js  (HTTP server)
             |   +-- SpreadingActivation.js Async activation propagation based on contextText (ACT-R model, keywords GIN seed -> 1-hop graph spread, 10-min TTL cache). Legacy stub re-export: lib/memory/SpreadingActivation.js
             |   +-- CaseRewardBackprop.js  case verification event -> evidence fragment importance atomic backpropagation. Returns immediately when MEMENTO_CASE_BACKPROP_ENABLED is unset. Legacy stub re-export: lib/memory/CaseRewardBackprop.js
             |   +-- NLIClassifier.js       NLI-based contradiction classifier (mDeBERTa ONNX, CPU). Legacy stub re-export: lib/memory/NLIClassifier.js
-            +-- ContextBuilder.js         Dedicated context() logic. Assembles Core/Working/Anchor Memory composite context
+            +-- ContextBuilder.js         Dedicated context() logic. `build()` internally decomposes into 6 private methods: `#loadCoreMemory` / `#loadWorkingMemory` / `#loadAnchorMemory` / `#loadLearningFragments` / `#buildInjectionLines` / `#buildStructuredResponse`
             +-- ReflectProcessor.js       Dedicated reflect() logic. summary->fragment conversion, episode creation, Working Memory cleanup
-            +-- BatchRememberProcessor.js Dedicated batchRemember() logic. Phase A (validation) -> B (INSERT) -> C (post-processing) 3-stage
+            +-- BatchRememberProcessor.js Dedicated batchRemember() logic. Phase A (validation) -> B (INSERT) -> C (post-processing) 3-stage. Supports async opt-in via `async: true` parameter: after pre-validation, enqueues job to Redis (`memento:batch_remember_queue`) and returns immediately. Falls back to synchronous path when Redis is unavailable. Worker (BatchRememberWorker) consumes the queue via the existing INSERT path
+            +-- BatchRememberWorker.js    Async queue worker for batch_remember. Polls `memento:batch_remember_queue` Redis queue and processes jobs via the BatchRememberProcessor synchronous path. `getBatchRememberWorker()` singleton factory. `server.js` `gracefulShutdown` awaits `stop()` drain for safe shutdown
             +-- QuotaChecker.js           API key fragment quota check (fragment_limit based)
             +-- RememberPostProcessor.js  remember() post-processing pipeline (embedding/morpheme/linking/assertion/temporal linking/evaluation queue/ProactiveRecall)
             +-- FragmentFactory.js        Fragment creation, validation, PII masking
             +-- FragmentStore.js          PostgreSQL CRUD facade (delegates to FragmentReader + FragmentWriter)
-            +-- FragmentReader.js         Fragment reads. `getById(id, agentId, keyId, groupKeyIds)` -- groupKeyIds parameter enables single-call lookup of fragments belonging to same-group keys. `getByIds`, `getHistory`, `searchByKeywords`, `searchBySemantic`
+            +-- FragmentReader.js         Fragment reads. `getById(id, agentId, keyId, groupKeyIds)` -- groupKeyIds parameter enables single-call lookup of fragments belonging to same-group keys. `getByIds`, `getHistory`, `searchByKeywords`, `searchBySemantic`, `findCaseIdBySessionTopic`, `findErrorFragmentsBySessionTopic`
+            +-- keyScope.js               `keyScopeClause(params, column, { keyId, groupKeyIds })` shared helper. Generates key_id-scoped WHERE clauses. Used by FragmentReader.getById / findCaseIdBySessionTopic / findErrorFragmentsBySessionTopic / GraphLinker / LinkStore / HistoryReconstructor / reconstruct.js
             +-- FragmentIndex.js          Redis L1 index management, getFragmentIndex() singleton factory
             +-- GraphLinker.js            Embedding-ready event subscriber for auto-linking + retroactive linking + Hebbian co-retrieval linking
             +-- MemoryEvaluator.js        Async Gemini CLI quality evaluation worker (singleton)
@@ -150,7 +152,7 @@ lib/
 lib/handlers/
 +-- _common.js         getAllowedOrigin, setWorkerRefs, recordConsolidateRun (shared utilities)
 +-- health-handler.js  handleHealth, handleMetrics
-+-- mcp-handler.js     handleMcpPost/Get/Delete (Streamable HTTP). `injectSessionContext(msg, ctx)` -- injects server-controlled context (_sessionId, _keyId, _groupKeyIds, _permissions, _defaultWorkspace) into tools/call message arguments. Client-supplied fields of the same name are overwritten with server values to prevent forgery
++-- mcp-handler.js     handleMcpPost/Get/Delete (Streamable HTTP). handleMcpPost internally decomposes into 4 private functions: `_resolveExistingSession` / `_createInitializeSession` / `_validateProtocolVersion` / `_dispatchAndRespond`. `injectSessionContext(msg, ctx)` -- injects server-controlled context (_sessionId, _keyId, _groupKeyIds, _permissions, _defaultWorkspace) into tools/call message arguments. Client-supplied fields of the same name are overwritten with server values to prevent forgery
 +-- sse-handler.js     handleLegacySseGet/Post (Legacy SSE)
 +-- oauth-handler.js   OAuth 5 endpoints (ServerMetadata, ResourceMetadata, Register, Authorize, Token)
 
@@ -483,7 +485,7 @@ The store for all fragments. This is the core table of the system.
 
 Index list: content_hash (UNIQUE), topic (B-tree), type (B-tree), keywords (GIN), importance DESC (B-tree), created_at DESC (B-tree), agent_id (B-tree), linked_to (GIN), (ttl_tier, created_at) (B-tree), source (B-tree), verified_at (B-tree), is_anchor WHERE TRUE (partial index), valid_from (B-tree), (topic, type) WHERE valid_to IS NULL (partial index), id WHERE valid_to IS NULL (partial UNIQUE). `idx_fragments_key_workspace` (key_id, workspace) WHERE valid_to IS NULL (composite partial index — optimizes simultaneous key + workspace filtering), `idx_fragments_workspace` (workspace) WHERE workspace IS NOT NULL AND valid_to IS NULL (partial index for workspace-only full scans).
 
-The HNSW vector index is created as a conditional index on `embedding IS NOT NULL`. Parameters: m=16 (neighbor connections), ef_construction=128 (index build search depth), distance function vector_cosine_ops. ef_search=80 (applied via session-level SET LOCAL).
+The HNSW vector index is created as a conditional index on `embedding IS NOT NULL`. Parameters: m=16 (neighbor connections), ef_construction=128 (index build search depth), distance function vector_cosine_ops. ef_search=80 (applied via session-level SET LOCAL). Before each vector search, `SET LOCAL enable_seqscan = off`, `SET LOCAL enable_bitmapscan = off`, and `SET LOCAL hnsw.iterative_scan = relaxed_order` are applied at the session level to guarantee the HNSW index path (`lib/tools/db.js` queryWithAgentVector).
 
 ### fragment_links
 
@@ -1251,6 +1253,43 @@ Current 21 stages (in order):
 | 19 | prune_keyword_indexes | Keyword index cleanup |
 | 20 | collect_stale_fragments | Stale fragment collection |
 | 21 | purge_stale_reflections / gc_search_events | Stale reflect purge / Search event GC |
+
+## batchPool / Primary Pool Split
+
+`getBatchPool()` in `lib/tools/db.js` provides a batch-dedicated connection pool independent from the primary pool, reducing primary pool connection starvation.
+
+```
+Primary Pool (getPrimaryPool)          Batch Pool (getBatchPool)
+  max = DB_MAX_CONNECTIONS               max = floor(primaryMax * 0.3), min 2
+  application_name = 'memento-mcp'       application_name = 'memento-mcp:batch'
+  DB = DATABASE_URL                      DB = BATCH_DATABASE_URL (falls back to primary DB)
+```
+
+Setting `BATCH_DATABASE_URL` routes to a separate DB instance for full I/O separation. Without it, connects to the same DB on a separate pool.
+
+BatchRememberProcessor defaults to `getBatchPool()` inside `_getPool()` (`lib/memory/BatchRememberProcessor.js`). Without a pool override, it always routes to the Batch pool.
+
+The scheduler (`lib/scheduler.js`) collects Batch pool stats every 1 minute.
+
+Related code: `lib/tools/db.js`.
+
+## batch_remember Async Processing
+
+The `batch_remember` tool supports async opt-in via the `async: true` parameter.
+
+Flow:
+1. Pre-validation (Phase A) -- immediately returns rejected items with content/type errors
+2. Redis queue (`memento:batch_remember_queue`) enqueue -- serializes job and calls `pushToQueue`
+3. Returns `{ async: true, accepted, rejected, jobId }` immediately
+4. BatchRememberWorker polls the queue in the background and processes via the BatchRememberProcessor synchronous INSERT path
+
+When Redis is unavailable (stub state), the async flag is ignored and falls back to the synchronous path. On server shutdown, `gracefulShutdown` awaits `getBatchRememberWorker().stop()` for worker drain (`server.js`).
+
+## keyScopeClause Shared Helper
+
+`keyScopeClause(params, column, { keyId, groupKeyIds })` in `lib/memory/keyScope.js` generates key_id-scoped WHERE clauses. For master key (`keyId = null`), no condition is added. For API keys, appends `column = $N OR column IN (groupKeyIds)` with parameter binding to the params array. Global (`key_id IS NULL`) fragments are intentionally excluded (consistent with FragmentReader.getById exact-match semantics).
+
+Call sites: `FragmentReader.getById` / `findCaseIdBySessionTopic` / `findErrorFragmentsBySessionTopic`, `GraphLinker` (retroactive linking and co-retrieval), `LinkStore` (GraphNeighborSearch seed key filter), `HistoryReconstructor`, `lib/tools/reconstruct.js`.
 
 ## _mergeDuplicates Scope (v3.2.2)
 
