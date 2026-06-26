@@ -32,6 +32,7 @@ before(async () => {
     await getPrimaryPool().query("SELECT 1");
     /** fragments 테이블 존재 여부도 확인 */
     await getPrimaryPool().query("SELECT 1 FROM agent_memory.fragments LIMIT 1");
+    await ensureTestApiKeys();
   } catch {
     dbOk = false;
     console.warn("[e2e/group-key-isolation] DB unreachable or schema missing — all tests skipped");
@@ -45,10 +46,42 @@ after(async () => {
       "UPDATE agent_memory.fragments SET valid_to = now() WHERE topic = $1 OR key_id = ANY($2::text[])",
       [TOPIC, [KEY_A, KEY_B, KEY_C]]
     );
+    await getPrimaryPool().query(
+      "DELETE FROM agent_memory.api_keys WHERE id = ANY($1::text[])",
+      [[KEY_A, KEY_B, KEY_C]]
+    );
   } catch (err) {
     console.warn("[e2e/group-key-isolation] teardown 실패:", err.message);
   }
 });
+
+async function ensureTestApiKeys() {
+  await getPrimaryPool().query(
+    "UPDATE agent_memory.fragments SET valid_to = now() WHERE topic = $1 OR key_id = ANY($2::text[])",
+    [TOPIC, [KEY_A, KEY_B, KEY_C]]
+  );
+  for (const key of [KEY_A, KEY_B, KEY_C]) {
+    await getPrimaryPool().query(
+      `INSERT INTO agent_memory.api_keys
+         (id, name, key_hash, key_prefix, permissions, status, fragment_limit)
+       VALUES ($1, $2, $3, $4, $5, 'active', 5000)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         key_hash = EXCLUDED.key_hash,
+         key_prefix = EXCLUDED.key_prefix,
+         permissions = EXCLUDED.permissions,
+         status = EXCLUDED.status,
+         fragment_limit = EXCLUDED.fragment_limit`,
+      [
+        key,
+        `e2e-group-key-isolation-${key.slice(-4)}`,
+        `e2e-group-key-isolation-hash-${key}`,
+        `e2e-${key.slice(-4)}`,
+        ["read", "write"]
+      ]
+    );
+  }
+}
 
 /**
  * KEY 하의 error 파편 + resolved_by 링크 1건 시드. { errId } 반환
