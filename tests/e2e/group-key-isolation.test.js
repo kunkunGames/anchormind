@@ -22,8 +22,10 @@ const KEY_A = "00000000-0000-0000-0000-00000000aaaa";
 const KEY_B = "00000000-0000-0000-0000-00000000bbbb";
 const KEY_C = "00000000-0000-0000-0000-00000000cccc";
 const TOPIC = "keyiso-test";
+const RUN_ID = `keyiso-${Date.now().toString(36)}`;
 
 let mgr, recaller, dbOk = true;
+let seedCounter = 0;
 
 before(async () => {
   mgr      = MemoryManager.getInstance();
@@ -90,8 +92,9 @@ async function ensureTestApiKeys() {
  * @returns {Promise<{ errId: string }>}
  */
 async function seedRcaChainUnderKey(key) {
+  const marker = `${RUN_ID}-${key.slice(-4)}-${++seedCounter}`;
   const err = await mgr.remember({
-    content     : "테스트 RCA 에러: 그룹 키 격리 검증용 원인 파편",
+    content     : `테스트 RCA 에러: 그룹 키 격리 검증용 원인 파편 (${marker})`,
     topic       : TOPIC,
     type        : "error",
     importance  : 0.6,
@@ -99,7 +102,7 @@ async function seedRcaChainUnderKey(key) {
     _groupKeyIds: [key]
   });
   const fix = await mgr.remember({
-    content     : "테스트 RCA 해결: 그룹 키 격리 검증용 해결 파편",
+    content     : `테스트 RCA 해결: 그룹 키 격리 검증용 해결 파편 (${marker})`,
     topic       : TOPIC,
     type        : "procedure",
     importance  : 0.6,
@@ -123,9 +126,10 @@ async function seedRcaChainUnderKey(key) {
  * @returns {Promise<{ caseId: string }>}
  */
 async function seedTraceUnderKey(key) {
-  const caseId = "feat-keyiso-2026-06-09";
+  const marker = `${RUN_ID}-${key.slice(-4)}-${++seedCounter}`;
+  const caseId = `feat-keyiso-${marker}`;
   await mgr.remember({
-    content     : "테스트 트레이스: 그룹 키 case_id 조회 검증용 파편",
+    content     : `테스트 트레이스: 그룹 키 case_id 조회 검증용 파편 (${marker})`,
     topic       : TOPIC,
     type        : "fact",
     importance  : 0.6,
