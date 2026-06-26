@@ -600,7 +600,7 @@ violations 있는 경우 (soft gate — 저장됨):
 | fragments | object[] | O | 저장할 파편 배열 (최대 200건). 각 항목은 content(string, 필수), topic(string, 필수), type(string, 필수), importance(number), keywords(string[]), workspace(string), idempotencyKey(string, 최대 128자) 포함. |
 | workspace | string | - | 배치 기본 워크스페이스. 개별 파편에 workspace 미지정 시 이 값으로 대체. 미지정 시 키의 default_workspace 적용. |
 | agentId | string | - | 에이전트 ID (RLS 격리용) |
-| stream | boolean | - | true 시 text/event-stream 진행 이벤트 송신. 각 처리 단계(Phase A/B/C)마다 progress 이벤트가 발행되고 완료 시 result 이벤트로 최종 응답을 수신한다. 클라이언트가 Accept: text/event-stream 헤더를 보내도 동일하게 활성화된다. |
+| stream | boolean | - | deprecated: 더 이상 SSE progress 이벤트를 보내지 않는다. batch_remember는 표준 단일 JSON 응답으로 반환된다. 이 파라미터는 하위 호환성을 위해 유지되지만 동작에 영향을 주지 않는다. |
 | async | boolean | - | true 시 파이어앤포겟(비동기) 모드 (기본 false). 스키마 유효성·content_hash 중복·할당량 선검증만 동기 수행한 뒤 통과 파편을 Redis 큐에 적재하고 즉시 `{async: true, accepted: N, rejected: N, jobId: "..."}` 를 반환한다. 본 INSERT는 백그라운드 워커(BatchRememberWorker)가 처리한다. Redis 비활성(REDIS_ENABLED=false) 환경에서는 async=true여도 동기 모드로 폴백한다. |
 
 ### async=true 응답 예시
@@ -614,7 +614,7 @@ violations 있는 경우 (soft gate — 저장됨):
 }
 ```
 
-동기 모드(기본)에서는 `results[]` 배열이 반환된다. `jobId`는 추적용 식별자로, 서버 로그에서 확인할 수 있다. 큐 유실 시 자동 재처리는 없다.
+동기 모드(기본)에서는 `results[]` 배열이 반환된다. `jobId`는 `batch_status` 도구로 처리 상태를 조회할 수 있다. 비동기 워커는 ack·재시도(최대 3회)·dead-letter·기동 복구(RPOPLPUSH reliable queue)로 at-least-once 처리를 보장한다.
 
 ### 사전 validate 에러 코드
 
@@ -626,6 +626,40 @@ violations 있는 경우 (soft gate — 저장됨):
 | `type is required` | `type` 필드 누락 |
 | `Content too short: length < 10 and word count < 3` | `FragmentFactory.validateContent` 판정 실패 — 내용이 너무 짧음 |
 | `fragment_limit_exceeded` | API 키 파편 할당량 초과 |
+
+---
+
+## MCP 도구 — batch_status
+
+`batch_remember(async: true)`가 반환한 `jobId`의 처리 상태를 조회한다. 읽기 전용. Redis 비활성 시 `status: null`을 반환한다.
+
+### 파라미터
+
+| 이름 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| jobId | string | O | `batch_remember(async: true)` 응답의 `jobId` |
+
+### 응답
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| jobId | string | 조회한 jobId |
+| state | string | `queued` \| `processing` \| `completed` \| `dead` |
+| accepted | number | 큐에 적재된 파편 수 |
+| processed | number | 처리 완료 파편 수 |
+| failed | number | 처리 실패 파편 수 |
+
+### 응답 예시
+
+```json
+{
+  "jobId": "batch-1750000000000-a1b2c3d4",
+  "state": "completed",
+  "accepted": 5,
+  "processed": 5,
+  "failed": 0
+}
+```
 
 ---
 

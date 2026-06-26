@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-06-20
+
+### Added
+- `batch_remember` 비동기 신뢰성 처리: 백그라운드 워커가 ack·재시도(최대 3회)·dead-letter·기동 복구(RPOPLPUSH reliable queue)로 at-least-once 배치 처리를 보장한다.
+- `batch_status(jobId)` 도구 추가: `batch_remember(async: true)` 결과 `jobId`로 처리 상태(queued/processing/completed/dead)를 조회하는 읽기 전용 도구.
+- Deferred tool discovery 클라이언트 가이드: Codex Desktop 등 lazy 로딩 클라이언트를 위한 `instructions` 초기화 지침·SKILL.md 섹션·README 가이드를 일관되게 정비.
+- 코어 도구에 MCP `title` + `annotations`(readOnlyHint/idempotentHint/openWorldHint) 메타데이터 추가. `tools/list` 응답에서 `recall`이 `remember` 바로 다음에 노출된다.
+
+### Changed
+- `batch_remember`·`memory_consolidate`가 표준 단일 JSON-RPC 응답으로 반환된다. `stream` 파라미터는 deprecated(하위 호환 유지, 동작 없음).
+- 총 도구 수 17 → 20(`batch_status`, `session_rotate`, `check_update`/`apply_update` 반영).
+
 ## [4.6.0] - 2026-06-16
 
 ### Added

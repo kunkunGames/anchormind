@@ -2,67 +2,24 @@
 
 AI 에이전트가 Memento MCP 기억 서버를 최대 효율로 활용하기 위한 기술 레퍼런스.
 
-## 현재 버전: v4.6.0
+## 현재 버전: v4.7.0
 
-v4.6.0은 `batch_remember` 비동기 모드 opt-in·배치 전용 연결 풀·내부 중복 정리 릴리즈다. `async: true` 지정 시 선검증 후 Redis 큐 적재, `{async, accepted, rejected, jobId}`를 즉시 반환하며 `BatchRememberWorker`가 본처리한다. 기본 `async: false`로 기존 동기 동작은 불변이고, Redis 비활성 시 동기 폴백이 작동한다. 배치 작업은 `getBatchPool`(`application_name='memento-mcp:batch'`) 전용 풀로 분리되어 배치 풀 통계 메트릭이 수집된다. 내부적으로 키 스코프 조회가 `keyScopeClause` 헬퍼로 통일되고, 피드백 보정 계수가 `feedbackFactor` 순수 함수로 단일화됐다.
+Memento MCP 서버는 AI 에이전트의 세션 간 장기 기억을 파편(Fragment) 단위로 영속화하고, 20개 도구를 통해 저장·검색·연결·반성 기능을 제공한다.
 
-v4.5.0은 `splitLongFragments` stage에 two-phase gate-then-commit·분할 품질 게이트(최소 길이 20자·대체 문자·CJK 혼입·대명사 시작 reject)·실패 backoff(`split_attempt_failed_at`)·분할 전용 provider 체인(`MEMENTO_SPLIT_LLM_*`)을 더하고, `FragmentGC`에 부모 tombstone된 split 자식 정리(branch-2)를 추가한 릴리즈다. 통과 자식이 `fragmentSplit.minItems`(기본 2) 미만이면 DB 커밋 없이 backoff만 기록하며, skip 사유는 `memento_consolidate_split_skipped_total{reason}` 메트릭에 누적된다.
+주요 현재 기능:
 
-v4.4.0은 보조 조회 도구의 키 격리 범위를 그룹 공유 키로 정렬한 릴리즈다. `graph_explore`(RCA 체인)·`search_traces`·`reconstruct_history`가 그룹 공유 키(`_groupKeyIds`) 범위의 파편을 조회하도록, 키 격리 WHERE 절을 신규 `lib/memory/keyScope.js`의 `keyScopeClause` 헬퍼로 통합했다. 헬퍼는 스칼라 키를 `IS NOT DISTINCT FROM`, 그룹 키를 `= ANY($n::text[])`로 매칭하며 `FragmentReader.getById`·`getByIds`·`LinkStore.getRCAChain`이 이를 공유한다. recall의 stale 판정은 `verified_at` 부재 시 `created_at`으로 폴백하고, 시각 정보가 없으면 판정을 보류한다.
+- `batch_remember`는 동기(기본)와 비동기(`async: true`) 두 모드를 지원한다. 비동기 모드에서는 선검증 후 Redis 큐에 적재하고 `{async, accepted, jobId}`를 즉시 반환하며, 워커가 ack·재시도(최대 3회)·dead-letter·기동 복구(RPOPLPUSH reliable queue)로 at-least-once 처리를 보장한다. `batch_status(jobId)`로 처리 상태(queued/processing/completed/dead)를 조회한다. Redis 비활성 환경에서는 자동으로 동기 모드로 폴백한다. `batch_remember`와 `memory_consolidate`는 표준 단일 JSON-RPC 응답으로 반환되며 `stream` 파라미터는 동작하지 않는다(하위 호환 유지).
+- 검색은 3계층(L1 키워드 → L2 pgvector 시맨틱 → L3 RRF 하이브리드)으로 자동 라우팅되며, `computeRecallScore` 함수가 cross-encoder reranker 결과에 topic/keyword 직접 일치 신호를 log 정규화된 가산항으로 반영한다. 시맨틱 임계값 기본값은 0.5이고, `SearchParamAdaptor`가 50회 이상 샘플 축적 후 키별·시간대별로 임계값을 자동 조정한다.
+- 형태소 분석은 로컬 CPU 분석기(`MorphemeTokenizer`)가 담당한다. 한글 garu-ko·영어 PorterStemmer·중국어 @node-rs/jieba·일본어 kuromoji로 라우팅하며, 벤치마크 기준 1.06ms/call 수준이다. `MEMENTO_MORPHEME_TOKENIZER=llm` 설정 시에만 LLM 경로가 활성화된다.
+- 코어 도구는 MCP `title` + `annotations`(readOnlyHint/idempotentHint/openWorldHint) 메타데이터를 포함한다. Codex Desktop 등 deferred/lazy 로딩 클라이언트를 위한 재검색 가이드가 서버 initialize instructions에 포함된다.
+- recall/context/reflect 응답 `_meta`에 `serverTime { iso, epoch_ms, display_kst, timezone }` 필드가 포함되어 LLM 클라이언트가 매 응답마다 서버 현재 시각을 재확인할 수 있다.
+- `tool_reflect` 응답에 `_meta.link_suggestions[]`가 포함된다. 이 목록은 schema-fit gate를 통과하지 못해 자동 링크되지 않은 인과 관계 후보다. LLM은 후보를 검토하여 정당한 인과로 판단되는 항목만 `link(fromId, toId, relationType=...)` 도구로 명시 호출한다.
+- recall/context 응답에서 `_meta.serverTime.display_kst` 또는 `_meta.serverTime.iso`로 현재 시점을 재확인하고 파편의 `created_at`·`age_days`와 대조하여 stale 여부를 판단한다. 응답 메타에 명시된 서버 시각이 자체 추정 시각과 다르면 서버 시각이 정답이다.
+- `lib/storage/` 어댑터 계층이 `getStorage()` 팩토리 형태로 존재하며, `MEMENTO_STORAGE` 환경변수로 storage 백엔드를 선택한다.
+- 검색 레이어는 `lib/memory/read/SearchScope.js`를 통해 `(workspace, caseId, resolutionStatus, phase, affect, keyId)` scope를 처음부터 정합 적용한다.
+- 실제 로직은 `lib/memory/processors/` 4개 클래스(MemoryRememberer·MemoryRecaller·MemoryReflector·MemoryLinker)와 `lib/memory/` 하위 6개 서브디렉토리(`read/`, `write/`, `link/`, `consolidate/`, `embedding/`, `signals/`)로 구성된다.
 
-v4.3.0은 L3 형태소 토크나이저를 LLM 서브프로세스(쿼리당 ~10초)에서 로컬 CPU 분석기로 전환한 릴리즈다. `lib/memory/embedding/MorphemeTokenizer.js`가 입력을 유니코드 스크립트 런으로 분할해 한글 garu-ko·영어 PorterStemmer·중국어 @node-rs/jieba·일본어 kuromoji로 라우팅하며, `MorphemeIndex.tokenize()`가 이 모듈에 위임한다(벤치 1.06ms/call, 상주 RSS +28.9MB). 서버 기동 시 한글·영어 분석기를 프리로드해 첫 쿼리 지연을 제거하고, 중국어·일본어는 등장 시 지연 로드한다. `MEMENTO_MORPHEME_TOKENIZER=local|llm`(기본 `local`)로 종전 경로 롤백, `MEMENTO_ENABLE_KUROMOJI=false`로 일본어 분석기(~269MB) 로딩을 차단한다. 한글 분기는 조사·어미·단음절 stopword 필터로 의미 형태소만 추출하며, OpenAI 임베딩 캐시(morpheme_dict)는 무변경이다.
-
-v4.2.0은 자동 후처리 4개 층위(ProactiveRecall · autoLinkSessionFragments · MemoryConsolidator · AutoReflect)에서 misgrouping/interference를 유발하던 rewrite-loop 경로를 schema-fit gate로 차단하는 릴리즈다. ProactiveRecall 자동 링크가 `proactiveRecall.mode` 3-값(`off`/`auto`/`legacy`, 기본 `auto`)으로 분기되며, `auto`에서는 기존 symbolic gate에 `workspace_mismatch`·`case_policy` 차단 사유가 추가된다. `caseIdPolicy` 3-값(`both-required`/`strict-or-adjacent`/`loose`, 기본 `strict-or-adjacent`)으로 한쪽 caseId null인 legacy 파편의 무차별 통과 누수를 sessionId·24h 인접·workspace 일치 신호로 보강한다. `autoLinkSessionFragments`의 errors×decisions·procedures×errors 카르테시안 곱집합이 1:1 top-1 schema-fit 매칭(동일 caseId/sessionId, 키워드 60%+, phase 단방향)으로 교체되고, 게이트 미통과 후보는 `tool_reflect` 응답 `_meta.link_suggestions[]`로 LLM에 위임된다. `MemoryConsolidator` 6h 시간 트리거에 `consolidate.schemaFit` 3-조건 게이트(pendingCase ≥5, recentRelated ≥20, fragsSinceLastRun ≥30, mode `any`/`all`/`off`)가 결합되고, LLM 재작성 stage 3종(`split_long_fragments`·`detect_contradictions`·`compress_old_fragments`)은 `consolidate.enableRiskyStages` 플래그로 개별 비활성 가능(`compress_old_fragments` 기본 off).
-
-### `_meta.link_suggestions` 활용 의무
-
-`tool_reflect` 응답에 `_meta.link_suggestions[]`가 비어있지 않으면, 해당 후보들은 schema-fit gate를 통과하지 못해 자동 링크되지 않은 인과 관계다. LLM은 응답 직후 후보를 검토하여 정당한 인과로 판단되는 항목만 `link(fromId, toId, relationType=...)` 도구로 명시 호출하라. 자동 링크 폭증으로 인한 misgrouping을 피하면서도 진짜 인과 관계는 LLM 판단으로 보존한다.
-
-### `_meta.serverTime` 활용 의무
-
-학습 시점에 시간 인식이 머무는 LLM 특성으로 인해 "오늘 며칠인지" "이 메모리가 얼마 전 것인지" 판단 오류가 발생한다. recall/context/reflect 응답을 받은 즉시 `_meta.serverTime.display_kst`(한국어 친화) 또는 `_meta.serverTime.iso`(정확한 기계 파싱)로 현재 시점을 재확인하고, 파편의 `created_at`·`age_days`와 대조하여 stale 여부를 판단하라. 응답 메타에 명시된 서버 시각이 자체 추정 시각과 다르면 서버 시각이 정답이다.
-
-## v4.1.0
-
-v4.1.0은 recall 최종 정렬과 시간 인지 보강 릴리즈다. `MemoryRecaller.recall`의 통합 정렬이 `computeRecallScore` 단일 함수로 교체되어 cross-encoder reranker 결과가 base로 보존되고, topic/keyword 직접 일치 신호가 log 정규화된 제한 가산항(reranked 0.12 / fallback 0.18, 연결 파편은 절반 감쇠)으로 반영된다. hard override(`1000 + lexical`) 패치는 reranker 폐기·이중 계산·페이지네이션 불안정 5개 결함으로 다중 LLM 토론 후 기각됐다. recall/context 응답 `_meta`에 `serverTime { iso, epoch_ms, display_kst, timezone }` 필드가 신규 노출되어 LLM 클라이언트가 매 응답마다 서버 현재 시각을 재확인할 수 있다.
-
-## v4.0.1
-
-v4.0.1은 recall 정확도 보정 patch 릴리즈다. Cross-encoder Reranker query에 `topic`·`keywords`·`text` prefix가 결합되어 정확 매칭 신호가 재정렬 단계까지 보존된다. `_searchL1` fallback의 L1 결과가 RRF에서 가중 강등(0.5)되고, fallback fragment가 `_searchL2.getByIds`로 누수되는 경로가 차단된다. `semanticSearch.minSimilarity` 기본값이 0.5로 상향됐고, 옵트인 ENV `MEMENTO_RECALL_MIN_SIM_FLOOR`로 적응형 임계값 하한을 강제할 수 있다. `EmbeddingCache` 캐시 키에 `EMBEDDING_MODEL` prefix가 결합되어 모델 변경 시 stale 벡터 hit이 차단된다. `boostAssistantFragments`의 기본 boost가 0.05 → 0.02로 축소됐다.
-
-## v4.0.0
-
-v4.0.0은 검색 정합성과 데이터 액세스 surface 두 축을 정리한 major 릴리즈다.
-
-(1) `lib/memory/read/SearchScope.js` 도입으로 검색 레이어가 `(workspace, caseId, resolutionStatus, phase, affect, keyId)` scope를 처음부터 정합 적용한다. `FragmentSearch._executeSearch`의 후처리 보정 4블록은 제거됐고, L1/HotCache/L2/L3/Graph 결과 모두 scope 정합 상태로 도착한다.
-
-(2) `lib/storage/` 어댑터 계층 신설. `getStorage()` 팩토리가 `MEMENTO_STORAGE` 환경변수에 따라 `PgVectorStore`(기본) 또는 `SqliteVecStore`(v4.1 본격 구현 예정 stub)를 반환한다. 호출 사이트(lib/memory/*) 마이그레이션은 v4.1에서 점진 수행한다.
-
-기존 외부 호출자 인터페이스(`search()` 응답, `_searchEventId`, `remember()` 응답, `recall()` 응답)는 모두 무변경이다.
-
-v3.9.0 변경 요약: `SearchSideEffects` 모듈 외부화 + 마이그레이션 body-only 규약 일괄 적용.
-
-v3.8.0 변경 요약: `FragmentSearch.search()`의 부작용 처리를 `_commitSearchSideEffects` 메서드로 1차 추출(메서드 단위).
-
-v3.7.0 변경 요약: `lib/memory/`의 14개 핵심 모듈을 6개 서브디렉토리(`read/`, `write/`, `link/`, `consolidate/`, `embedding/`, `signals/`)로 분류 이동. 기존 위치에 stub re-export 유지로 외부 import 무변경.
-
-v3.6.0 변경 요약: `CaseRewardBackprop`에 `MEMENTO_CASE_BACKPROP_ENABLED` 런타임 토글 도입(기본 off). `docs/features.md` 실험 플래그 표 정합화.
-
-v3.5.0 변경 요약: `scripts/lint-migrations.js` + `docs/migration-conventions.md`로 신규 마이그레이션 규약을 명문화. `docs/operations/agent-worktree.md`, `docs/operations/upstream-porting.md` 운영 가이드 신설.
-
-v3.4.0 변경 요약: LLM dispatcher 코어(`dispatchChain`)를 export로 분리하여 단위 테스트가 실제 구현을 직접 검증. `docs/concurrency.md`와 `docs/features.md`로 운영·리뷰 보조 ledger 신설.
-
-v3.3.0 변경 요약: `MemoryConsolidator._runConsolidationCycle`을 선언형 `stageDefs` 배열로 재구성하여 SSE/관리 콘솔 진행률 정합을 확보. `test:ci`에 통합 테스트를 포함하여 CI 단일 게이트가 unit + integration + e2e를 모두 커버.
-
-v3.2.x 변경 요약은 다음과 같다.
-
-- v3.2.2: `MemoryRememberer.remember`의 PolicyRules 게이트 평가가 dryRun·atomic·non-atomic 분기 모두 단일 시점에 동작하도록 통일. `MemoryConsolidator._mergeDuplicates`의 그룹 키를 `(key_id, workspace, content_hash)`로 한정.
-- v3.2.1: reasoning 모델 응답의 `<think>` 블록 사전 제거를 `parse-json.js`에 도입. 본 SKILL 상단의 기억 도구 사용 규칙 섹션이 추가됐다.
-- v3.2.0: `BatchRememberProcessor` 도입, `EmbeddingWorker`/`MorphemeIndex` 배치 경로 도입, `BATCH_DATABASE_URL` 분리, migration-035 적용.
-
-v3.1.1은 LLM Provider 체인 동시성 제어(concurrency semaphore + 429 cooldown)를 추가한 patch 릴리즈다. Ollama Cloud 및 외부 LLM 프록시 등에서 동시 요청 버스트로 인한 HTTP 429 연쇄 실패를 차단한다. 기본값으로 활성화되며 `LLM_CONCURRENCY_ENABLED=false`로 끌 수 있다. v3.1.0 기반 기능(`_meta.*` 경로, `scripts/post-migrate-flexible-embedding-dims.js`)은 그대로 유지된다.
-
-### LLM 동시성 제어 (v3.1.1)
+### LLM 동시성 제어
 
 - Provider별 세마포어: chain key(`provider|baseUrl|model`) 기준 슬롯 한도 관리. 한도 초과 시 대기, 30초 타임아웃 초과 시 다음 fallback provider로 자동 전환.
 - 429 쿨다운: HTTP 429 수신 시 해당 provider가 500-2000ms 랜덤 지터 동안 `isAvailable()=false` 반환. 체인 스킵 후 재진입.
@@ -75,7 +32,7 @@ v3.1.1은 LLM Provider 체인 동시성 제어(concurrency semaphore + 429 coold
 
 ### `_meta` 응답 필드 사용 의무
 
-recall / context 응답 메타데이터는 `_meta.searchEventId` / `_meta.hints` / `_meta.suggestion` 경로로만 읽는다. top-level mirror 필드(`_searchEventId` / `_memento_hint` / `_suggestion`)는 v3.1.0에서 제거됐으며, 구버전 클라이언트는 `_meta.*`로 전환한다.
+recall / context 응답 메타데이터는 `_meta.searchEventId` / `_meta.hints` / `_meta.suggestion` 경로로만 읽는다. top-level mirror 필드(`_searchEventId` / `_memento_hint` / `_suggestion`)는 지원되지 않는다.
 
 ---
 
@@ -293,7 +250,7 @@ const hint    = res._meta.hints;           // signal + trigger
 const suggest = res._meta.suggestion;      // recommendedTool + recommendedArgs
 ```
 
-top-level `_searchEventId` / `_memento_hint` / `_suggestion` mirror 필드는 v3.1.0에서 완전히 제거됐다. `_meta.*` 경로만 사용할 것.
+top-level `_searchEventId` / `_memento_hint` / `_suggestion` mirror 필드는 지원되지 않는다. `_meta.*` 경로만 사용할 것.
 
 #### fields 파라미터 (sparse fieldsets)
 
@@ -322,7 +279,7 @@ top-level `_searchEventId` / `_memento_hint` / `_suggestion` mirror 필드는 v3
 
 ### 내부 구조
 
-사용자 MCP API에는 변경이 없다. 실제 로직은 `lib/memory/processors/` 4개 클래스로 분리됐으며, 핵심 모듈은 `lib/memory/` 하위 6개 서브디렉토리(`read/`, `write/`, `link/`, `consolidate/`, `embedding/`, `signals/`)로 분류돼 있다. 기존 위치에는 stub re-export가 유지되어 외부 import가 무변경이다. `lib/storage/` 어댑터 계층이 v4.0에 신설됐다.
+사용자 MCP API는 안정적이다. 실제 로직은 `lib/memory/processors/` 4개 클래스로 분리됐으며, 핵심 모듈은 `lib/memory/` 하위 6개 서브디렉토리(`read/`, `write/`, `link/`, `consolidate/`, `embedding/`, `signals/`)로 분류돼 있다. 기존 위치에는 stub re-export가 유지되어 외부 import가 무변경이다. `lib/storage/` 어댑터 계층이 존재한다.
 
 - MemoryRememberer: remember / batchRemember
 - MemoryRecaller: recall / context
@@ -427,9 +384,9 @@ Symbolic Verification Layer는 확률론적 검색 파이프라인 위에 추가
 - `recall` → 각 파편의 `explanations: [{code, detail, ruleVersion}]` (`MEMENTO_SYMBOLIC_EXPLAIN=true` 시)
 - 에러 `-32003 SYMBOLIC_POLICY_VIOLATION` (해당 키의 `symbolic_hard_gate=true` 상태에서 PolicyRules 위반 시)
 
-## 보안 강화 사항 (이전 버전 업그레이드 시 체크)
+## 보안 기본값 및 설정
 
-다음 항목은 이전 버전에서 업그레이드하는 환경에서 반드시 확인해야 하는 변경 사항이다.
+다음 항목은 서버 운영 시 반드시 확인해야 하는 보안 설정이다.
 
 ### 인증 (Auth)
 
@@ -456,7 +413,7 @@ Symbolic Verification Layer는 확률론적 검색 파이프라인 위에 추가
 | `OAUTH_REFRESH_TTL_SECONDS` | number | `604800` | OAuth refresh token 유효 시간 (초). |
 | `MEMENTO_REMEMBER_ATOMIC` | boolean | `false` | `true` 시 remember()의 quota check + INSERT를 단일 트랜잭션으로 원자화(TOCTOU 완전 차단). 동시 요청이 드문 환경에서는 기본값 유지. |
 | `MEMENTO_CASE_BACKPROP_ENABLED` | boolean | `false` | `true` 시 case verification 이벤트마다 증거 파편 importance를 자동 역전파(CaseRewardBackprop). 비활성 시 no-op. |
-| `MEMENTO_STORAGE` | string | `pgvector` | storage 어댑터 선택. `pgvector`(기본, PgVectorStore) 또는 `sqlite-vec`(SqliteVecStore, v4.1 본격 구현 예정). |
+| `MEMENTO_STORAGE` | string | `pgvector` | storage 어댑터 선택. `pgvector`(기본, PgVectorStore) 또는 `sqlite-vec`(SqliteVecStore). |
 | `MIGRATION_LINT_FROM` | string | (없음) | `npm run lint:migrations` cutoff override. 지정 마이그레이션 번호 이후만 검사. |
 
 ---
@@ -827,7 +784,19 @@ curl 응답 검증 체크:
 - keywords에 플랫폼명 포함: `["memento-mcp", "claude-code", "my-host"]`
 - recall 시 플랫폼 필터: `recall(keywords=["claude-code"])`
 
-## 도구 레퍼런스 (17개)
+## Codex Desktop / Deferred Tool Discovery (클라이언트 호환)
+
+Codex Desktop 등 일부 MCP 클라이언트는 도구를 deferred/lazy 로딩한다. tool_search가 검색어와 limit에 따라 그 턴에 일부 도구만 노출하므로, 서버 tools/list에 분명히 존재하는 recall이 저장 편향 쿼리+낮은 limit에서 빠질 수 있다.
+
+핵심 원칙: 한 번의 좁은 검색 결과를 서버의 실제 도구 목록으로 오해하지 마라. remember/batch_remember/reflect는 보이는데 recall이 안 보이면, 즉시 더 넓은 쿼리와 큰 limit으로 재검색한다.
+
+재검색 패턴:
+- query: `memento context recall remember reflect batch_remember search_traces reconstruct_history`
+- limit: 20 이상
+
+검증: 서버 raw tools/list에는 context/recall/remember/reflect/batch_remember가 항상 포함된다. healthy 서버에서 특정 턴에 도구가 안 보이면 클라이언트 deferred 검색 한계이지 서버 누락이 아니다.
+
+## 도구 레퍼런스 (20개)
 
 RBAC default-deny: 도구 맵에 등록되지 않은 도구를 호출하면 `"Access denied: tool not permitted"` 오류가 반환된다. 서버 관리자가 허용 도구 목록(`RBAC_TOOL_MAP`)을 명시적으로 관리한다.
 
@@ -867,15 +836,16 @@ RBAC default-deny: 도구 맵에 등록되지 않은 도구를 호출하면 `"Ac
 
 ### batch_remember
 
-여러 파편을 한번에 저장. 단일 트랜잭션, 최대 200건. episode/contextSummary/isAnchor/supersedes/linkedTo/scope 미지원.
+여러 파편을 한번에 저장. 단일 트랜잭션, 최대 200건. episode/contextSummary/isAnchor/supersedes/linkedTo/scope 미지원. 항상 표준 단일 JSON-RPC 응답을 반환한다(`stream` 파라미터는 deprecated, 동작 없음).
 
 | 이름 | 타입 | 필수 | 설명 |
 |------|------|------|------|
 | fragments | array | O | [{content, topic, type, importance?, keywords?}] 최대 200건 |
-| async | boolean | - | true 시 파이어앤포겟 비동기 모드. 선검증 후 Redis 큐 적재, {async, accepted, rejected, jobId} 즉시 반환. 기본 false(동기). Redis 비활성 시 동기 폴백. |
+| async | boolean | - | true 시 비동기 모드. 선검증 후 Redis 큐 적재, `{async, accepted, jobId}` 즉시 반환. 워커가 ack·재시도(최대 3회)·dead-letter·기동 복구로 at-least-once 처리. 기본 false(동기). Redis 비활성 시 동기 폴백. |
+| stream | boolean | - | deprecated. 더 이상 SSE progress 이벤트를 보내지 않는다. 무시됨. |
 | agentId | string | - | 에이전트 ID |
 
-async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기를 피하려면 `async: true`. 단 즉시 받는 것은 `accepted` 수와 `jobId`뿐이며 per-fragment id는 반환되지 않고, 파편은 워커 처리 후에 recall 가능(즉시 아님, eventual)하다. 재시도 안전이 필요하면 각 항목에 `idempotencyKey`를 넣는다. 소수 저장이나 직후 해당 파편을 곧바로 참조해야 하는 경우는 기본 동기 모드(async 생략)를 쓴다.
+async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기를 피하려면 `async: true`. 즉시 반환되는 것은 `accepted` 수와 `jobId`이며, per-fragment id는 반환되지 않고 파편은 워커 처리 후에 recall 가능(eventual)하다. `batch_status(jobId)`로 처리 상태를 확인할 수 있다. 재시도 안전이 필요하면 각 항목에 `idempotencyKey`를 넣는다. 소수 저장이나 직후 해당 파편을 곧바로 참조해야 하는 경우는 기본 동기 모드(async 생략)를 쓴다.
 
 ### recall
 
@@ -1011,7 +981,11 @@ fragment_ids를 지정하고 ENABLE_RECONSOLIDATION=true인 경우: relevant=fal
 
 ### memory_consolidate
 
-수동 GC 트리거. TTL 전환, 감쇠, 만료 삭제, 중복 병합. master key 전용. 파라미터 없음.
+수동 GC 트리거. TTL 전환, 감쇠, 만료 삭제, 중복 병합. master key 전용. 항상 표준 단일 JSON-RPC 응답을 반환한다.
+
+| 파라미터 | 타입 | 설명 |
+|---|---|---|
+| stream | boolean | deprecated. 더 이상 SSE progress 이벤트를 보내지 않는다. 하위 호환성을 위해 파라미터는 유지되지만 동작에 영향 없음. |
 
 ### graph_explore
 
@@ -1040,7 +1014,7 @@ id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permissio
 
 | 이름 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| section | string | - | overview, lifecycle, keywords, search, episode, multiplatform, tools, importance |
+| section | string | - | overview, lifecycle, keywords, search, episode, multiplatform, codex, tools, importance, experiential, cbr, triggers, antipatterns |
 
 미지정 시 전체 가이드(~12KB) 반환.
 
@@ -1113,6 +1087,40 @@ id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permissio
 { "reason": "scheduled_rotation" }
 ```
 
+### batch_status
+
+**목적**: `batch_remember(async: true)`가 반환한 `jobId`의 처리 상태를 조회한다. 읽기 전용.
+
+**반환 state**: `queued` | `processing` | `completed` | `dead`. Redis 비활성 시 `status: null`.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| jobId | string | O | `batch_remember(async:true)` 응답의 `jobId` |
+
+**예시**:
+```json
+{ "jobId": "batch:550e8400-e29b-41d4-a716-446655440000" }
+```
+
+반환값 예시: `{ "jobId": "...", "state": "completed", "accepted": 42, "processed": 42, "failed": 0 }`
+
+### check_update
+
+현재 버전과 최신 GitHub 태그를 비교하여 업데이트 가용 여부를 확인한다. master key 전용.
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| force | boolean | false | true면 캐시 무시하고 GitHub 재조회 |
+
+### apply_update
+
+지정된 단계의 업데이트를 실행한다. `check_update` 선행 필수. master key 전용.
+
+| 파라미터 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| step | string | O | 실행할 단계: `fetch` / `install` / `migrate` |
+| dryRun | boolean | - | true(기본)면 명령어 미리보기만. false면 실제 실행. |
+
 ## 자동 백그라운드 동작
 
 다음 3개 기능은 별도 도구 호출 없이 자동으로 동작한다.
@@ -1141,15 +1149,17 @@ id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permissio
 
 ## 중요도 기본값
 
-| 타입 | 권장 | 근거 |
-|------|------|------|
-| preference | 0.9 | 사용자 의도 정확 반영 |
-| error | 0.8 | 재발 시 즉시 해결 |
-| procedure | 0.7 | 안정적 회상 필요 |
-| decision | 0.7 | 모순 방지 |
-| episode | 0.6 | 맥락 보존용 |
-| fact | 0.5 | 일반 사실 |
-| relation | 0.5 | 관계 기록 |
+| 타입 | 권장 | 코드 상한(isAnchor=false) | 근거 |
+|------|------|--------------------------|------|
+| preference | 0.9 | 0.9 | 사용자 의도 정확 반영 |
+| error | 0.8 | 0.6 | 재발 시 즉시 해결. 0.6 초과 지정 시 0.6으로 clamp됨. |
+| procedure | 0.8 | 0.6 | 안정적 회상 필요. 0.6 초과 지정 시 0.6으로 clamp됨. |
+| decision | 0.7 | 0.7 | 모순 방지 |
+| fact | 0.6 | 0.7 | 일반 사실. 0.7 이하까지 허용됨. |
+| episode | 0.6 | 없음 | 맥락 보존용 |
+| relation | 0.5 | 0.7 | 관계 기록 |
+
+코드 기준(`lib/memory/write/FragmentWriter.js` `MAX_INITIAL_IMPORTANCE`): `isAnchor=true`이면 상한 제거. content 20자 미만이면 최대 0.2로 추가 제한.
 
 ## 기억 저장 규칙
 
@@ -1510,7 +1520,7 @@ recall 시 신뢰도 기반 판단:
 
 ### _meta.hints 처리 규칙
 
-recall 또는 context 응답의 `_meta.hints` 필드를 읽는다(v3.1.0에서 top-level `_memento_hint` mirror 제거됨):
+recall 또는 context 응답의 `_meta.hints` 필드를 읽는다:
 - `signal` 값을 읽어 상황 파악
 - `suggestion` 텍스트를 사용자에게 알리거나 즉시 실행 고려
 - `trigger` 필드에 지정된 도구를 다음 행동으로 우선 고려

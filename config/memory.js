@@ -74,8 +74,9 @@ export const MEMORY_CONFIG = {
   },
   /** batch_remember 비동기 워커 설정 */
   batchRememberWorker: {
-    intervalMs: 1000,
-    queueKey  : "memento:batch_remember_queue"
+    intervalMs : 1000,
+    retryLimit : 3,
+    queueKey   : "memento:batch_remember_queue"
   },
   /** 컨텍스트 주입 설정 */
   contextInjection: {

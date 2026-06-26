@@ -108,6 +108,13 @@ claude mcp list
 
 For project-scoped sharing, declare the server in `.mcp.json` at the repository root instead. See [Claude Code Configuration](docs/getting-started/claude-code.md) for details.
 
+### Codex Desktop Integration
+
+Some MCP clients such as Codex Desktop use deferred/lazy tool discovery. tool_search may expose only a subset of tools depending on the query and limit, so recall — which always exists in tools/list — can be missing from storage-biased queries with a low limit. If recall is not visible, retry with a broader query and limit 20 or above. Recommendation: seed this retry rule into the agent system prompt/instructions upfront to prevent the initial discovery loop.
+
+- query: `memento context recall remember reflect batch_remember search_traces reconstruct_history`
+- limit: 20 or above
+
 ### Supported Environments
 
 | Environment | Recommendation | Getting Started |
@@ -164,7 +171,7 @@ See [integration guides](docs/getting-started/) for platform-specific setup.
 | Admin Console | Memory explorer, knowledge graph, statistics dashboard, API key group/status filters, inline daily-limit editing |
 | OAuth Integration | RFC 7591 Dynamic Client Registration, Claude.ai Web and ChatGPT integration support |
 | **Workspace isolation** | Partition memories by project, role, or client within the same API key. Auto-tag via `api_keys.default_workspace`, auto-filter on recall. |
-| **Batch async mode** | `batch_remember` persists fragments via multi-row INSERT and offloads embedding and post-processing to a non-blocking async worker (BatchRememberWorker). |
+| **Batch async mode** | `batch_remember` persists fragments via multi-row INSERT and offloads embedding and post-processing to a non-blocking async worker (BatchRememberWorker). With `async: true`, the worker guarantees at-least-once delivery via ack, retry (up to 3), dead-letter, and startup recovery (RPOPLPUSH reliable queue). Use `batch_status(jobId)` to query job state (queued/processing/completed/dead). Always returns a standard single JSON-RPC response (`stream` param deprecated). |
 
 ### What's New in v3.0.0 — CLI/API Enhancement Phase 2 (folded from v2.12.0)
 
