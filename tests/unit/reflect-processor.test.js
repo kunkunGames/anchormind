@@ -12,7 +12,7 @@
 import { describe, it, mock, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 
-mock.module("../../lib/memory/MorphemeIndex.js", {
+mock.module("../../lib/memory/embedding/MorphemeIndex.js", {
   namedExports: {
     MorphemeIndex: class {
       async tokenize(t)              { return String(t).toLowerCase().split(/[\s,.]+/).filter(w => w.length > 1).slice(0, 10); }
@@ -21,7 +21,7 @@ mock.module("../../lib/memory/MorphemeIndex.js", {
   },
 });
 
-const { ReflectProcessor }  = await import("../../lib/memory/ReflectProcessor.js");
+const { ReflectProcessor }  = await import("../../lib/memory/processors/ReflectProcessor.js");
 const { teardownTestResources, assertCleanShutdown } = await import("../_lifecycle.js");
 
 /**

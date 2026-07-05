@@ -45,7 +45,7 @@ mock.module("../../config/memory.js", {
 });
 
 /** FragmentStore 모킹 */
-mock.module("../../lib/memory/FragmentStore.js", {
+mock.module("../../lib/memory/write/FragmentStore.js", {
     namedExports: {
         FragmentStore: class MockFragmentStore {
             decayImportance()       { return Promise.resolve(undefined); }
@@ -67,7 +67,7 @@ mock.module("../../lib/memory/FragmentIndex.js", {
 });
 
 /** EmbeddingWorker 모킹 */
-mock.module("../../lib/memory/EmbeddingWorker.js", {
+mock.module("../../lib/memory/embedding/EmbeddingWorker.js", {
     namedExports: {
         EmbeddingWorker: class MockEmbeddingWorker {
             processOrphanFragments() { return Promise.resolve(0); }
@@ -76,7 +76,7 @@ mock.module("../../lib/memory/EmbeddingWorker.js", {
 });
 
 /** ContradictionDetector 모킹 */
-mock.module("../../lib/memory/ContradictionDetector.js", {
+mock.module("../../lib/memory/link/ContradictionDetector.js", {
     namedExports: {
         ContradictionDetector: class MockContradictionDetector {
             resetCheckedPairs()             {}
@@ -88,7 +88,7 @@ mock.module("../../lib/memory/ContradictionDetector.js", {
 });
 
 /** ConsolidatorGC 모킹 */
-mock.module("../../lib/memory/ConsolidatorGC.js", {
+mock.module("../../lib/memory/consolidate/ConsolidatorGC.js", {
     namedExports: {
         ConsolidatorGC: class MockConsolidatorGC {
             generateFeedbackReport() { return Promise.resolve(false); }
@@ -103,7 +103,7 @@ mock.module("../../lib/memory/ConsolidatorGC.js", {
 });
 
 /** GraphLinker 모킹 */
-mock.module("../../lib/memory/GraphLinker.js", {
+mock.module("../../lib/memory/link/GraphLinker.js", {
     namedExports: {
         GraphLinker: class MockGraphLinker {
             retroLink() { return Promise.resolve({ linksCreated: 0 }); }
@@ -117,7 +117,7 @@ describe("MemoryConsolidator stage 계측", () => {
     let MemoryConsolidator;
 
     before(async () => {
-        const mod        = await import("../../lib/memory/MemoryConsolidator.js");
+        const mod        = await import("../../lib/memory/consolidate/MemoryConsolidator.js");
         MemoryConsolidator = mod.MemoryConsolidator;
     });
 

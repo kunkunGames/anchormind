@@ -14,14 +14,14 @@ write 경로별 lock 종류·격리 수준·재시도 정책을 한 페이지로
 |consolidate.merge_duplicates|`MemoryConsolidator._mergeDuplicates`|advisory 없음. `queryWithAgentVector("system", …)`로 RLS 우회|개별 UPDATE/DELETE. `WHERE key_id = $X`로 키 범위 강제|cycle 단위 LIMIT 50으로 1회 실행, 미처리분은 다음 cycle에서 처리|GROUP BY (key_id, workspace, content_hash) + scope mismatch 어설션 + key_id 조건부 UPDATE/DELETE|`tests/unit/consolidator-merge-tenant-scope.test.js`|
 |consolidate.semantic_dedup|`MemoryConsolidator._semanticDedup`|advisory 없음|개별 쿼리|cycle 단위 LIMIT|topic·key_id 범위 안 KNN cos>=0.92|`tests/unit/semantic-dedup.test.js`|
 |consolidate.detect_contradictions|`MemoryConsolidator._detectContradictions`|advisory 없음|개별 쿼리|`resetCheckedPairs()`로 cycle 시작 시 추적 초기화|NLI + LLM 하이브리드. `pending_contradictions` 큐로 후처리 분리|`tests/unit/detect-supersessions.test.js`|
-|link.createLinks|`LinkStore.createLinks` (`lib/memory/LinkStore.js`)|`pg_advisory_xact_lock` 1개 + multi-row INSERT|단일 트랜잭션|advisory 획득 실패 시 단건 fallback|`(from_id, to_id, relation_type)` UNIQUE로 중복 차단|`tests/unit/link-store.test.js`|
+|link.createLinks|`LinkStore.createLinks` (`lib/memory/link/LinkStore.js`)|`pg_advisory_xact_lock` 1개 + multi-row INSERT|단일 트랜잭션|advisory 획득 실패 시 단건 fallback|`(from_id, to_id, relation_type)` UNIQUE로 중복 차단|`tests/unit/link-store.test.js`|
 |link.autoLinkSessionFragments|`SessionLinker.autoLinkSessionFragments`|sortedKey 사전식 정렬로 deadlock 방지|개별 쿼리|`wouldCreateCycle` 캐시로 동일 cycle 내 재계산 회피|cycle detection 사전 검사|`tests/integration/session-linker-deadlock.test.js`|
 |reflect|`MemoryReflector.reflect` → `BatchRememberProcessor.process`|상속(batchRemember)|상속|상속|상속 + idempotencyKey 권장|`tests/integration/reflect-large-payload.test.js`|
 |LLM dispatch|`dispatchChain` (`lib/llm/index.js`)|`getSemaphore(chainKey, limit, waitMs)` per provider chainKey|단일 fetch|429 / semaphore timeout 시 다음 fallback provider로|`provider|baseUrl|model|apiKeyHash` 단위 독립 sem|`tests/unit/llm-dispatcher-concurrency.test.js`, `tests/unit/llm-dispatcher-no-inline-mirror.test.js`|
 
 ## 격리 수준 약식
 
-- 모든 RLS 정책은 `app.current_agent_id` 세션 변수로 enforce된다. atomic·consolidate 경로가 `app.current_agent_id='system'`을 설정하면 RLS를 우회한다. 의도된 우회는 키 범위(`WHERE key_id = $X`)로 명시 가드되어야 한다 (PR-2 이후 `_mergeDuplicates`에 적용).
+- 모든 RLS 정책은 `app.current_agent_id` 세션 변수로 enforce된다. atomic·consolidate 경로가 `app.current_agent_id='system'`을 설정하면 RLS를 우회한다. 의도된 우회는 키 범위(`WHERE key_id = $X`)로 명시 가드되어야 하며, `_mergeDuplicates`가 이 가드를 적용한다.
 - master 키(`key_id IS NULL`)는 자동 병합·hard gate 대상에서 제외된다. cross-tenant 데이터 유실 경로를 차단하기 위함.
 
 ## 재시도 정책 정리
@@ -48,7 +48,7 @@ read 경로는 write 경로와 달리 row-level lock을 사용하지 않는다. 
 |경로|진입점|필터 계약|격리 특성|비고|
 |-|-|-|-|-|
 |recall (HotCache)|`FragmentSearch._searchHotCache`|`SearchScope.applyTo(fragment)`|읽기 전용. RLS는 호출자 agent_id 적용|L1 캐시 히트. workspace/caseId/phase/affect 5개 필드를 단일 `applyTo` 호출로 판정|
-|recall (L3 semantic)|`FragmentSearch._searchL3`|`SearchScope.applyTo(fragment)` post-filter|읽기 전용|pgvector KNN 후 `SearchScope`로 2차 필터. v4.0.0 이전의 `_executeSearch` 후처리 보정 제거됨|
+|recall (L3 semantic)|`FragmentSearch._searchL3`|`SearchScope.applyTo(fragment)` post-filter|읽기 전용|pgvector KNN 후 `SearchScope`로 2차 필터. `_executeSearch`는 별도의 후처리 보정을 수행하지 않는다|
 |recall (graph)|`FragmentSearch._searchGraph`|호출 사이트에서 `SearchScope.applyTo` 직접 적용|읽기 전용|GraphExplorer가 반환한 fragment 각각에 applyTo 체크|
 |recall (side effects)|`commitSearchSideEffects` (`lib/memory/read/SearchSideEffects.js`)|없음 (결과 확정 후 별도 실행)|fire-and-forget `recordOutcome` + await `recordSearchEvent`|`searchEventId` 반환. tool_feedback FK 계약에 사용됨|
 
@@ -63,7 +63,7 @@ read 경로는 write 경로와 달리 row-level lock을 사용하지 않는다. 
 |변수|기본|영향|
 |-|-|-|
 |`MEMENTO_REMEMBER_ATOMIC`|`false`|`true`이면 remember 경로가 atomic 트랜잭션 사용|
-|`MEMENTO_STORAGE`|`pgvector`|스토리지 어댑터 선택. `pgvector`(기본, 프로덕션) 또는 `sqlite-vec`(v4.1 예정 stub)|
+|`MEMENTO_STORAGE`|`pgvector`|스토리지 어댑터 선택. `pgvector`(기본, 프로덕션) 또는 `sqlite-vec`(미구현 스텁)|
 |`LLM_CONCURRENCY_ENABLED`|`true`|`false`이면 dispatcher가 semaphore 없이 chain 호출|
 |`LLM_CONCURRENCY_WAIT_MS`|`30000`|semaphore 슬롯 대기 timeout|
 |`LLM_CONCURRENCY`|JSON|chainKey 또는 provider name 기준 limit override|

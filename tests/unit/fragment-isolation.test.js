@@ -16,8 +16,8 @@
 import { describe, it, mock, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { FragmentWriter, sanitizeInsertImportance } from "../../lib/memory/FragmentWriter.js";
-import { BatchRememberProcessor }                   from "../../lib/memory/BatchRememberProcessor.js";
+import { FragmentWriter, sanitizeInsertImportance } from "../../lib/memory/write/FragmentWriter.js";
+import { BatchRememberProcessor }                   from "../../lib/memory/write/BatchRememberProcessor.js";
 import { disconnectRedis }                          from "../../lib/redis.js";
 
 after(async () => { await disconnectRedis().catch(() => {}); });

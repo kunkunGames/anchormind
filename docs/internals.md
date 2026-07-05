@@ -1,7 +1,5 @@
 # Internals
 
-> v4.6.0 기준
-
 ## MemoryManager (조율 계층)
 
 MemoryManager는 thin facade다. 비즈니스 로직은 `lib/memory/processors/` 하위 4개 프로세서로 위임된다.
@@ -33,7 +31,7 @@ MemoryManager는 thin facade다. 비즈니스 로직은 `lib/memory/processors/`
 | `SearchScope` (`lib/memory/read/SearchScope.js`) | workspace·caseId·resolutionStatus·phase·affect 5개 필드를 모든 검색 레이어에 일관 전달하는 정합 필터 계약 객체 |
 | `SearchSideEffects` (`lib/memory/read/SearchSideEffects.js`) | 검색 결과 확정 후 부작용(검색 이벤트 영속화, SearchParamAdaptor 학습 신호)을 단일 모듈로 격리 |
 
-v3.x 시점에는 FragmentSearch가 `lib/memory/FragmentSearch.js`에 위치했다. v4.0.0부터 검색 관련 모듈이 `lib/memory/read/`로 이동되었으며, 기존 경로에 stub 호환 레이어가 남아 있어 하위 호환성이 유지된다.
+검색 관련 모듈은 `lib/memory/read/`에 위치하며, 임포트 경로는 실제 파일 위치를 그대로 따른다.
 
 **facade 생성자 흐름:** 20개 공유 객체 초기화 → 4 프로세서 DI 주입 → `_installSharedSync()` 호출. 15개 공개 메서드는 1줄 위임으로 구현된다.
 
@@ -101,7 +99,7 @@ recall(query)
 
 `pickFields`는 17개 화이트리스트(`id, content, type, importance, topic, ...`) 외 필드를 제거한다. 캐시 단계(L1 warm hit, RRF 병합 중간 객체)에는 적용하지 않아 캐시 효율을 보존한다.
 
-**SearchScope 계약:** `SearchScope.fromQuery(sq)` 정적 팩토리가 `_buildSearchQuery()` 반환 sq에서 scope 인스턴스를 생성한다. `scope.applyTo(fragment)` 메서드는 workspace, caseId, resolutionStatus, phase, affect 5개 필드를 동시 검사하여 false를 반환하는 경우 해당 파편을 결과에서 제외한다. HotCache·L3·Graph 호출 사이트가 모두 동일 인스턴스를 참조하므로 레이어별 파편 결과의 정합성이 보장된다. v4.0.0 이전에는 `_executeSearch()` 종료 후 후처리 보정을 별도로 수행했으며, SearchScope 도입으로 이 후처리 보정 단계가 제거되었다.
+**SearchScope 계약:** `SearchScope.fromQuery(sq)` 정적 팩토리가 `_buildSearchQuery()` 반환 sq에서 scope 인스턴스를 생성한다. `scope.applyTo(fragment)` 메서드는 workspace, caseId, resolutionStatus, phase, affect 5개 필드를 동시 검사하여 false를 반환하는 경우 해당 파편을 결과에서 제외한다. HotCache·L3·Graph 호출 사이트가 모두 동일 인스턴스를 참조하므로 레이어별 파편 결과의 정합성이 보장된다. `_executeSearch()`는 별도의 후처리 보정을 수행하지 않는다.
 
 ---
 
@@ -229,7 +227,7 @@ Legacy SSE 세션도 요청마다 `expiresAt`을 `now + SESSION_TTL_MS`로 갱�
 
 ### SessionActivityTracker.getUnreflectedSessions 상한
 
-`lib/memory/SessionActivityTracker.js`의 `getUnreflectedSessions(limit)` 메서드는 Redis SCAN으로 `frag:activity:*` 키를 순회한다. 대용량 keyspace에서 무한 순회를 방지하기 위해 `MAX_SCANS=20` 상한이 설정되어 있다. 한 번 SCAN 호출 시 `COUNT 50`을 전달하므로 최대 20 × 50 = 1,000개 키를 처리한 뒤 중단된다. 결과가 `limit`에 먼저 도달해도 조기 종료한다.
+`lib/memory/processors/SessionActivityTracker.js`의 `getUnreflectedSessions(limit)` 메서드는 Redis SCAN으로 `frag:activity:*` 키를 순회한다. 대용량 keyspace에서 무한 순회를 방지하기 위해 `MAX_SCANS=20` 상한이 설정되어 있다. 한 번 SCAN 호출 시 `COUNT 50`을 전달하므로 최대 20 × 50 = 1,000개 키를 처리한 뒤 중단된다. 결과가 `limit`에 먼저 도달해도 조기 종료한다.
 
 ### Redis TTL 동기화
 
@@ -268,9 +266,9 @@ API 키 원문을 client_id로 등록한 기존 Redis 토큰은 `bound_key_id=nu
 
 `POST /token` 에서 `grant_type=refresh_token`으로 토큰을 갱신할 때, 원본 토큰의 `is_api_key` 플래그가 새로 발급되는 access_token과 refresh_token에 그대로 전파된다. API 키 기반 클라이언트가 갱신 후에도 동일한 격리 컨텍스트를 유지한다.
 
-### SESSION_TTL 기본값 변경
+### SESSION_TTL 기본값
 
-`SESSION_TTL` 환경변수의 기본값이 240분에서 43200분(30일)으로 변경되었다. 슬라이딩 윈도우 방식으로 도구 사용 시마다 TTL이 갱신되므로, 30일 비활동 후에만 만료된다. 활발히 사용 중인 세션은 사실상 만료되지 않는다.
+`SESSION_TTL` 환경변수의 기본값은 43200분(30일)이다. 슬라이딩 윈도우 방식으로 도구 사용 시마다 TTL이 갱신되므로, 30일 비활동 후에만 만료된다. 활발히 사용 중인 세션은 사실상 만료되지 않는다.
 
 ---
 
@@ -319,7 +317,7 @@ RRF 병합 이후 상위 30건을 cross-encoder로 정밀 재정렬하여 검색
 
 **API 키 격리:** `options.keyId`를 쿼리에 `key_id = ANY($n)`으로 전달하여 타 API 키 소유 파편을 temporal 링크 대상에서 제외한다. 키 스코프 SQL 조건 생성은 `lib/memory/keyScope.js`의 `keyScopeClause(params, column, { keyId, groupKeyIds })` 공용 헬퍼를 사용한다. GraphLinker, FragmentSearch, `getById`, `findCaseIdBySessionTopic`, `findErrorFragmentsBySessionTopic` 등 키 필터가 필요한 모든 경로가 이 헬퍼로 통일되어 있다.
 
-fragment_links.weight 컬럼은 migration-023에서 integer→real로 변경되어 float 가중치를 지원한다.
+fragment_links.weight 컬럼은 real 타입이며 float 가중치를 지원한다(migration-023).
 
 ---
 
@@ -383,7 +381,7 @@ case_events 테이블에 semantic milestone을 기록하고 조회하는 전담 
 
 ## ReconsolidationEngine (링크 동적 갱신)
 
-`lib/memory/ReconsolidationEngine.js`는 fragment_links의 weight와 confidence를 동적으로 갱신하고 변경 이력을 link_reconsolidations 테이블에 기록한다.
+`lib/memory/link/ReconsolidationEngine.js`는 fragment_links의 weight와 confidence를 동적으로 갱신하고 변경 이력을 link_reconsolidations 테이블에 기록한다.
 
 **reconsolidate(linkId, action, opts) — 5가지 action:**
 
@@ -407,14 +405,14 @@ weight는 [0, 2] 범위로 클램핑되며, confidence는 [0, 1] 범위로 클�
 
 ## EpisodeContinuityService (에피소드 연속성)
 
-`lib/memory/EpisodeContinuityService.js`는 reflect() 호출 시 episode 파편에 case_events milestone을 삽입하고 이전 에피소드와 preceded_by 엣지로 연결한다.
+`lib/memory/processors/EpisodeContinuityService.js`는 reflect() 호출 시 episode 파편에 case_events milestone을 삽입하고 이전 에피소드와 preceded_by 엣지로 연결한다.
 
 **linkEpisodeMilestone(episodeFragmentId, agentId, keyId, sessionId):**
 
 1. fragment 내용 첫 200자를 요약으로 조회
 2. milestone_reached 이벤트를 case_events에 삽입 (ON CONFLICT idempotency_key DO NOTHING — 중복 방지)
 3. 동일 agentId의 직전 milestone eventId가 캐시에 있으면 preceded_by 엣지 삽입
-4. lastEventByAgent Map에 현재 eventId 저장
+4. lastEventByAgent Map에 현재 eventId 저장 (삽입 순서 기반 LRU, 상한 `MAX_TRACKED_AGENTS=1000`. 재삽입 시 최신 위치로 갱신되며, 상한 초과 시 가장 오래된 항목을 방출한다)
 
 **idempotency_key 형식:** `milestone:{agentId}:{sessionId}:{fragmentId}` — 서버 재시작 후 동일 호출이 재발생해도 중복 이벤트가 생성되지 않는다.
 
@@ -424,7 +422,7 @@ MemoryManager.reflect() 완료 후 fire-and-forget으로 호출된다. 실패해
 
 ## SpreadingActivation (확산 활성화)
 
-`lib/memory/SpreadingActivation.js`는 현재 대화 맥락(contextText)에서 관련 파편을 선제적으로 활성화한다. ACT-R Spreading Activation 모델 기반.
+`lib/memory/signals/SpreadingActivation.js`는 현재 대화 맥락(contextText)에서 관련 파편을 선제적으로 활성화한다. ACT-R Spreading Activation 모델 기반.
 
 **activateByContext(contextText, agentId, keyId, sessionId):**
 
@@ -458,7 +456,7 @@ mDeBERTa NLI (in-process ONNX / 외부 HTTP 서비스)
 
 - **비용 효율**: 99% 후보를 NLI로 처리, LLM 호출은 수치·도메인 모순에만 발생
 - **데이터 무손실**: 파편 삭제 대신 temporal 컬럼으로 버전 관리
-- **구현 파일**: `lib/memory/NLIClassifier.js`, `lib/memory/MemoryConsolidator.js`
+- **구현 파일**: `lib/memory/signals/NLIClassifier.js`, `lib/memory/consolidate/MemoryConsolidator.js`
 - **환경변수**: `NLI_SERVICE_URL` 미설정 시 ONNX in-process 자동 사용 (~280MB, 최초 실행 시 다운로드)
 
 ---
@@ -570,20 +568,20 @@ architecture.md의 Symbolic Memory Layer 섹션이 전체 설계를 다룬다. �
 
 ### RememberPostProcessor 8단계 및 _extractSymbolicClaims 경로
 
-`lib/memory/RememberPostProcessor.js`의 `run()` 메서드는 8단계를 순차 실행한다. 8단계는 Symbolic claim extraction이며 `this._symbolicClaimPromise = this._extractSymbolicClaims(...).catch(...)` fire-and-forget 패턴으로 진행한다. 메인 파이프라인을 블로킹하지 않으며 실패해도 기억 저장에 영향을 주지 않는다.
+`lib/memory/write/RememberPostProcessor.js`의 `run()` 메서드는 8단계를 순차 실행한다. 8단계는 Symbolic claim extraction이며 `this._symbolicClaimPromise = this._extractSymbolicClaims(...).catch(...)` fire-and-forget 패턴으로 진행한다. 메인 파이프라인을 블로킹하지 않으며 실패해도 기억 저장에 영향을 주지 않는다.
 
 `_extractSymbolicClaims(fragment, { agentId, keyId })`: `SYMBOLIC_CONFIG.enabled && SYMBOLIC_CONFIG.claimExtraction` 가드 → `ClaimExtractor.extract` → `ClaimStore.insert`. TENANT_ISOLATION_VIOLATION 예외는 `symbolicMetrics.recordGateBlock("claim_extraction", "tenant_violation")` 후 swallow. 성공 claim마다 `symbolicMetrics.recordClaim(extractor, polarity)` 호출.
 
 ### FragmentSearch Hook Chain 삽입 위치
 
-`lib/memory/FragmentSearch.js` 라인 88 이후 3개 hook이 순서대로 실행된다:
+`lib/memory/read/FragmentSearch.js` 라인 88 이후 3개 hook이 순서대로 실행된다:
 1. **shadow hook** (라인 99): `SYMBOLIC_CONFIG.enabled && SYMBOLIC_CONFIG.shadow` → `symbolicMetrics.observeLatency("shadow_recall", ...)` 기록만
 2. **explain hook** (라인 107): `SYMBOLIC_CONFIG.enabled && SYMBOLIC_CONFIG.explain` → `explanationBuilder.annotate(clean, { searchPath, layerLatency, query, caseContext })`
 3. **cbr filter** (라인 124): `SYMBOLIC_CONFIG.enabled && SYMBOLIC_CONFIG.cbrFilter && sq.caseId` → `cbrEligibility.filter(clean, sq)`. pre-filter `rawResultCount`는 SearchParamAdaptor 학습 신호 보호를 위해 별도 보존.
 
 ### ConflictResolver.checkAssertionConsistency 및 validationWarnings 병기
 
-`lib/memory/ConflictResolver.js`의 `checkAssertionConsistency`는 기존 Jaccard 파이프라인(`JACCARD_THRESHOLD=0.3`, 7일 창 최대 10건)을 보존하면서 symbolic polarity 충돌 결과를 병기한다. `SYMBOLIC_CONFIG.enabled && SYMBOLIC_CONFIG.polarityConflict` 가드 내에서 `ClaimConflictDetector.detectPolarityConflicts`를 호출하며 예외는 logWarn 후 swallow한다. polarity 충돌에서 발견된 `conflictWith` ID는 기존 `supersedeCandidates`에 병합된다. 반환 타입이 `{ assertionStatus, supersedeCandidates, validationWarnings }` 3-tuple로 확장되었으며, 플래그 off 시 `validationWarnings: []`로 빈 배열을 반환한다.
+`lib/memory/write/ConflictResolver.js`의 `checkAssertionConsistency`는 Jaccard 파이프라인(`JACCARD_THRESHOLD=0.3`, 7일 창 최대 10건)과 symbolic polarity 충돌 검사를 함께 수행한다. `SYMBOLIC_CONFIG.enabled && SYMBOLIC_CONFIG.polarityConflict` 가드 내에서 `ClaimConflictDetector.detectPolarityConflicts`를 호출하며 예외는 logWarn 후 swallow한다. polarity 충돌에서 발견된 `conflictWith` ID는 `supersedeCandidates`에 병합된다. 반환 타입은 `{ assertionStatus, supersedeCandidates, validationWarnings }` 3-tuple이며, 플래그 off 시 `validationWarnings: []`를 반환한다.
 
 ---
 
@@ -671,7 +669,7 @@ initialize 이후 모든 요청에서 `MCP-Protocol-Version` 헤더를 검사한
 
 ## RecallSuggestionEngine 내부 동작
 
-`lib/memory/RecallSuggestionEngine.js`. `MemoryManager.recall()` 완료 직후 fail-open 방식으로 호출된다. 예외 발생 시 null을 반환하여 recall 응답 자체에는 영향을 주지 않는다.
+`lib/memory/read/RecallSuggestionEngine.js`. `MemoryManager.recall()` 완료 직후 fail-open 방식으로 호출된다. 예외 발생 시 null을 반환하여 recall 응답 자체에는 영향을 주지 않는다.
 
 응답의 `_suggestion` 필드로 클라이언트에 비침습적 힌트를 주입한다. 4개 규칙을 우선순위 순으로 평가하며, 첫 매치에서 즉시 반환한다(중복 제안 없음).
 
@@ -698,7 +696,7 @@ initialize 이후 모든 요청에서 `MCP-Protocol-Version` 헤더를 검사한
 
 ## Tool 메타 레지스트리 내부 동작
 
-각 MCP 도구 정의에 `meta` 필드가 추가되었다. `tools/list` 응답 조립 시 자동으로 포함된다.
+각 MCP 도구 정의는 `meta` 필드를 갖는다. `tools/list` 응답 조립 시 자동으로 포함된다.
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
@@ -760,6 +758,10 @@ const output = await this._pipeline(text, { pooling: "mean", normalize: true });
 
 `pooling: "mean"`으로 토큰 벡터를 평균하고 `normalize: true`로 L2 정규화한다. 결과는 `normalizeL2()`로 재정규화하여 부동소수점 오차를 보정한다.
 
+**init in-flight 단일화 및 추론 직렬화:** `init()` 호출이 겹치면 동일한 `_initPromise`를 공유하여 파이프라인 중복 로드를 막는다. ONNX 파이프라인은 단일 인스턴스이므로 `_enqueue(job)`가 `embed`/`embedBatch` 호출을 FIFO 체인으로 직렬화한다. 개별 작업 실패는 체인 자체를 끊지 않으며 호출자에게는 원래 결과가 그대로 전달된다.
+
+**embedBatch 배치 추론:** `embedBatch(texts)`는 배열 입력을 파이프라인에 1회 추론으로 전달한다. 출력이 `tolist()`를 지원하면 이를 사용해 텍스트별 벡터로 분리하고, 미지원 출력이면 `_chunkFlat`으로 평탄 배열을 텍스트 수만큼 균등 분할하는 폴백 경로를 탄다. `lib/tools/embedding.js`의 `generateBatchEmbeddings`는 transformers provider 사용 시 이 `embedBatch`를 `batchSize` 단위 청크로 호출한다.
+
 **Reranker/NLIClassifier와 런타임 공유:** 세 모듈 모두 `@huggingface/transformers`를 사용하지만 각각 다른 파이프라인 태스크(`feature-extraction` / `text-ranking` / `zero-shot-classification`)로 로드한다. ONNX Runtime 인스턴스는 프로세스 내에서 공유되므로 추가 메모리 오버헤드는 minimal하다.
 
 **메모리 예산 참고:**
@@ -781,7 +783,7 @@ const output = await this._pipeline(text, { pooling: "mean", normalize: true });
 | 값 | 어댑터 | 상태 |
 |-|-|-|
 | `pgvector` (기본) | `PgVectorStore` | 운영 |
-| `sqlite-vec` | `SqliteVecStore` | v4.1 구현 예정, 현재 stub |
+| `sqlite-vec` | `SqliteVecStore` | 미구현 스텁 |
 
 모든 어댑터는 아래 5개 메서드 + 2개 프로퍼티를 공통 인터페이스로 구현한다.
 

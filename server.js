@@ -41,8 +41,8 @@ import {
 /** 도구 (통계 저장용) */
 import { saveAccessStats } from "./lib/tools/index.js";
 import { shutdownPool, getPrimaryPool } from "./lib/tools/db.js";
-import { getMemoryEvaluator } from "./lib/memory/MemoryEvaluator.js";
-import { getBatchRememberWorker } from "./lib/memory/BatchRememberWorker.js";
+import { getMemoryEvaluator } from "./lib/memory/signals/MemoryEvaluator.js";
+import { getBatchRememberWorker } from "./lib/memory/write/BatchRememberWorker.js";
 
 /** 메트릭 */
 import { recordHttpRequest } from "./lib/metrics.js";
@@ -51,7 +51,7 @@ import { recordHttpRequest } from "./lib/metrics.js";
 import { startSchedulers } from "./lib/scheduler.js";
 
 /** Reranker 사전 로드 */
-import { preloadReranker } from "./lib/memory/Reranker.js";
+import { preloadReranker } from "./lib/memory/read/Reranker.js";
 
 /** 형태소 분석기 워밍업 */
 import { warmup as warmupMorpheme } from "./lib/memory/embedding/MorphemeTokenizer.js";
