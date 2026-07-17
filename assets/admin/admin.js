@@ -6,7 +6,7 @@
  * 수정일: 2026-04-20 (metrics 모듈 추가)
  */
 
-import { state, registerView, renderView } from "./modules/state.js";
+import { state, registerView, renderView, setSidebarRenderer } from "./modules/state.js";
 import { renderLogin } from "./modules/auth.js";
 import { renderSidebar, renderCommandBar } from "./modules/layout.js";
 import { renderOverview } from "./modules/overview.js";
@@ -42,6 +42,7 @@ registerView("metrics",  renderMetrics);
 
 /* ── Bootstrap ── */
 function init() {
+  setSidebarRenderer(renderSidebar);
   const urlKey = new URLSearchParams(window.location.search).get("key");
   if (urlKey && !state.masterKey) {
     state.masterKey = urlKey;
@@ -57,6 +58,14 @@ function init() {
           renderSidebar();
           renderCommandBar();
           renderView();
+          /** healthFlags 실측 표시: stats 로드 후 커맨드바 갱신 */
+          api("/stats").then(statsRes => {
+            if (statsRes.ok) {
+              state.stats = statsRes.data;
+              state.lastUpdated = Date.now();
+              renderCommandBar();
+            }
+          });
         } else {
           state.masterKey = "";
           sessionStorage.removeItem("adminKey");

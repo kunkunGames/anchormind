@@ -6,6 +6,15 @@
  * 수정일: 2026-05-22 (morphemeIndex kanaMinChars, enableKuromoji 추가)
  */
 
+/**
+ * 환경 변수를 정수로 파싱한다. 파싱 실패 시 기본값, 성공 시 min~max 클램프.
+ */
+function envInt(name, def, min, max) {
+  const raw = Number.parseInt(process.env[name] ?? "", 10);
+  if (Number.isNaN(raw)) return def;
+  return Math.min(max, Math.max(min, raw));
+}
+
 export const MEMORY_CONFIG = {
   /** 복합 랭킹 가중치 (합계 1.0) */
   ranking: {
@@ -47,9 +56,10 @@ export const MEMORY_CONFIG = {
   },
   /** Reciprocal Rank Fusion 검색 설정 */
   rrfSearch: {
-    k                : 60,    // RRF 상수 (높을수록 상위 랭크 부스트 감소)
-    l1WeightFactor   : 2.0,   // L1(Redis) 결과 가중치 배수
-    graphWeightFactor: 1.5    // L2.5 그래프 이웃 가중치 배수
+    k                     : 60,    // RRF 상수 (높을수록 상위 랭크 부스트 감소)
+    l1WeightFactor        : 2.0,   // L1(Redis) 결과 가중치 배수
+    graphWeightFactor     : 1.5,   // L2.5 그래프 이웃 가중치 배수
+    candidateMinImportance: 0.1    // RRF 후보 저중요도 컷오프 하한 (비-앵커)
   },
   /** L2.5 그래프 이웃 검색 설정 */
   graph: {
@@ -80,6 +90,7 @@ export const MEMORY_CONFIG = {
   },
   /** 컨텍스트 주입 설정 */
   contextInjection: {
+    maxAnchorFragments : envInt("MEMENTO_CONTEXT_ANCHOR_LIMIT", 10, 1, 30),
     maxCoreFragments   : 15,
     maxWmFragments     : 10,
     typeSlots          : {
@@ -112,13 +123,14 @@ export const MEMORY_CONFIG = {
   /** session_reflect 파편 정리 정책 */
   reflectionPolicy: {
     maxAgeDays       : 30,
-    maxImportance    : 0.3,
+    maxImportance    : 0.55,
     keepPerType      : 5,
     maxDeletePerCycle: 30
   },
-  /** 시맨틱 검색 설정. minSimilarity는 SearchParamAdaptor가 적응형으로 조정한다. */
+  /** 시맨틱 검색 설정. minSimilarity는 SearchParamAdaptor가 적응형으로 조정한다.
+   *  0.40: 12쿼리 골드셋 실측에서 상위5 유용건 최대(0.5는 자유 회상 질의 침묵, 0.35는 노이즈가 이득 상쇄). */
   semanticSearch: {
-    minSimilarity: 0.5,
+    minSimilarity: 0.4,
     limit        : 30
   },
   /** 파편 GC 정책 */

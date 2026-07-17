@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="assets/images/memento_mcp_logo_transparent.png" width="400" alt="Memento MCP Logo">
+  <img src="assets/images/anchormind_logo.png" width="400" alt="AnchorMind Logo">
 </p>
 
 <p align="center">
-  <a href="https://github.com/JinHo-von-Choi/memento-mcp/releases">
-    <img src="https://img.shields.io/github/v/release/JinHo-von-Choi/memento-mcp?style=flat&label=release&color=4c8bf5" alt="GitHub Release" />
+  <a href="https://github.com/JinHo-von-Choi/anchormind/releases">
+    <img src="https://img.shields.io/github/v/release/JinHo-von-Choi/anchormind?style=flat&label=release&color=4c8bf5" alt="GitHub Release" />
   </a>
-  <a href="https://github.com/JinHo-von-Choi/memento-mcp/stargazers">
-    <img src="https://img.shields.io/github/stars/JinHo-von-Choi/memento-mcp?style=flat&color=f5c542" alt="GitHub Stars" />
+  <a href="https://github.com/JinHo-von-Choi/anchormind/stargazers">
+    <img src="https://img.shields.io/github/stars/JinHo-von-Choi/anchormind?style=flat&color=f5c542" alt="GitHub Stars" />
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat" alt="License" />
@@ -21,20 +21,22 @@
   <a href="README.en.md">📖 English Documentation</a>
 </p>
 
-# Memento MCP
+# AnchorMind
 
 > AI에게 기억을 줍니다. 그리고 그 기억을 발판으로 성장하게 합니다.
 
-매일 아침 기억이 리셋되는 신입직원을 상상해보라. 어제 가르친 것도, 지난주 함께 해결한 문제도, 취향도 전부 까먹는다. Memento MCP는 이 신입에게 기억을 심어준다.
+매일 아침 기억이 리셋되는 신입직원을 상상해보라. 어제 가르친 것도, 지난주 함께 해결한 문제도, 취향도 전부 까먹는다. AnchorMind는 이 신입에게 기억을 심어준다.
 
-Memento MCP는 MCP(Model Context Protocol) 기반 에이전트 장기 기억 서버다. 세션이 종료되어도 중요한 사실, 결정, 에러 패턴, 절차를 유지하고 다음 세션에서 복원한다.
+AnchorMind는 MCP(Model Context Protocol) 기반 에이전트 장기 기억 서버다. 세션이 종료되어도 중요한 사실, 결정, 에러 패턴, 절차를 유지하고 다음 세션에서 복원한다.
+
+> 이 프로젝트는 memento-mcp라는 이름으로 시작했다. 기억을 다루는 프로젝트에 잘 어울리는 이름이라고 지금도 생각하지만, 같거나 비슷한 이름의 프로젝트가 많아 AnchorMind로 바꿨다. 흘러가는 대화 속에서 남길 가치가 있는 기억을 닻처럼 붙들어 고정한다는 뜻이며, 세션이 끝나도 유실되지 않는 이 시스템의 앵커 파편(anchor fragment) 개념과도 맞닿아 있다.
 
 단순한 기억의 도서관이 아니다. 피드백이 쌓이면 연결이 강해지고, 경험이 반복되면 패턴이 추상화되고, 세션이 이어지면 이야기가 생긴다. 기억하는 AI가 아니라 경험으로 성장하는 AI를 지향한다.
 
 > [!TIP]
 > 설치·설정을 직접 다루기 부담스럽다면 Claude Code·Cursor·Codex 같은 AI 어시스턴트에 다음 한 문장을 전달하면 된다.
 >
-> > "memento-mcp 저장소를 내 환경에 설치하고, `docs/INSTALL.md`와 `SKILL.md`를 읽어 권장 설정을 적용한 뒤 동작을 검증해 줘."
+> > "anchormind 저장소를 내 환경에 설치하고, `docs/INSTALL.md`와 `SKILL.md`를 읽어 권장 설정을 적용한 뒤 동작을 검증해 줘."
 >
 > 의존성 설치, `.env` 구성, MCP 등록, 헬스 체크까지 AI가 안내한다. 자세한 위임 절차는 [`docs/INSTALL.md`](docs/INSTALL.md#ai에게-맡기기) 참고.
 
@@ -125,7 +127,7 @@ Codex Desktop 등 일부 MCP 클라이언트는 deferred/lazy tool discovery를 
 
 ## 호환 플랫폼
 
-Memento는 MCP(Model Context Protocol) 표준 서버다. Claude Code뿐 아니라, MCP를 지원하는 모든 AI 플랫폼에서 사용할 수 있다.
+AnchorMind는 MCP(Model Context Protocol) 표준 서버다. Claude Code뿐 아니라, MCP를 지원하는 모든 AI 플랫폼에서 사용할 수 있다.
 
 | 플랫폼 | 설정 위치 | 연결 방식 |
 |--------|----------|-----------|
@@ -253,7 +255,7 @@ memento-mcp remember "내용" --topic 프로젝트명 --idempotency-key k1
 
 ## 기억 vs 규칙
 
-Memento가 주입하는 기억 파편은 시스템 프롬프트보다 우선순위가 낮다. "PostgreSQL 15를 쓴다"같은 사실 기억은 잘 작동하지만, "테스트 작성 시 반드시 Given-When-Then 패턴을 쓸 것"같은 행동 규칙은 시스템 프롬프트와 충돌하면 무시될 수 있다.
+AnchorMind가 주입하는 기억 파편은 시스템 프롬프트보다 우선순위가 낮다. "PostgreSQL 15를 쓴다"같은 사실 기억은 잘 작동하지만, "테스트 작성 시 반드시 Given-When-Then 패턴을 쓸 것"같은 행동 규칙은 시스템 프롬프트와 충돌하면 무시될 수 있다.
 
 행동 규칙은 CLAUDE.md, AGENTS.md, 훅(hooks), 스킬(skills) 등 우선순위가 높은 채널에 설정하는 것을 권장한다.
 
@@ -273,11 +275,11 @@ Memento가 주입하는 기억 파편은 시스템 프롬프트보다 우선순�
 
 ## 사용 패턴
 
-Memento는 사실 기억(fact cache)에 최적화되어 있다. 전후관계가 중요한 경우:
+AnchorMind는 사실 기억(fact cache)에 최적화되어 있다. 전후관계가 중요한 경우:
 
 - `episode` 유형으로 서사를 저장하면 "왜 그런 결정을 했는지"까지 복원 가능
 - `contextSummary`를 함께 저장하면 recall 시 맥락이 함께 반환됨
-- 메인 메모리 시스템(MEMORY.md 등)과 병행하여 사실 검색은 Memento, 맥락 복원은 메인 메모리로 역할 분담하는 이원화 구조도 효과적
+- 메인 메모리 시스템(MEMORY.md 등)과 병행하여 사실 검색은 AnchorMind, 맥락 복원은 메인 메모리로 역할 분담하는 이원화 구조도 효과적
 
 ## 누가 쓰면 좋은가
 
@@ -375,7 +377,7 @@ PostgreSQL만 있으면 핵심 기능이 동작한다. Redis를 추가하면 L1 
 
 이미 설명한 것, 이미 세팅한 것을 무한히 반복하게 만드는 것이 가장 큰 문제였다. 인증 정보가 없다고 해서 보면 있고, 세팅 안 돼 있다고 해서 파일을 직접 열어보면 다 돼 있다. 철저하게 논파해서 말 잘 듣게 해 봐야 그때뿐이다. 세션을 다시 시작하면 같은 일이 또 반복된다. 명문대를 수석 졸업했지만 매일 뇌가 리셋되는 신입사원의 교육담당자가 된 기분이었다.
 
-"야 너 미정이 기억나냐" -- 단서 없이는 아무것도 떠오르지 않지만, "초등학교 1학년 때 짝궁" 한마디면 지우개 빌려줬던 일까지 줄줄이 떠오른다. AI도 마찬가지다. 어제 해결한 버그, 지난주 내린 결정, 선호하는 코딩 스타일. 매 세션 리셋 대신, Memento가 기억해둔다.
+"야 너 미정이 기억나냐" -- 단서 없이는 아무것도 떠오르지 않지만, "초등학교 1학년 때 짝궁" 한마디면 지우개 빌려줬던 일까지 줄줄이 떠오른다. AI도 마찬가지다. 어제 해결한 버그, 지난주 내린 결정, 선호하는 코딩 스타일. 매 세션 리셋 대신, AnchorMind가 기억해둔다.
 
 이 고충을 해소하기 위해 기억을 원자 단위로 분해하고, 계층적으로 검색하고, 시간에 따라 자연스럽게 망각하는 시스템을 설계했다. 인간이 망각의 동물인 것처럼, 이 시스템은 "적절한 망각"을 포함한 기억을 지향한다.
 

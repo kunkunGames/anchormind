@@ -150,15 +150,15 @@ describe("renderRiskPanel", () => {
   test("normal items with bg-surface-container", () => {
     const panel = renderRiskPanel({});
     const normals = panel.querySelectorAll(".bg-surface-container");
-    assert.ok(normals.length >= 2, "최소 2개 normal item");
+    assert.ok(normals.length >= 1, "최소 1개 normal item (Quality Pending)");
   });
 });
 
 describe("renderQuickActions", () => {
-  test("glass-panel + gradient 배경", () => {
+  test("glass-panel 플랫 패널", () => {
     const panel = renderQuickActions();
     assert.ok(panel.className.includes("glass-panel"));
-    assert.ok(panel.className.includes("bg-gradient-to-br"));
+    assert.ok(!panel.className.includes("bg-gradient-to-br"));
   });
 
   test("4개 버튼 렌더링", () => {

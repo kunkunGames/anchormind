@@ -35,6 +35,9 @@
 | COMPRESS_AGE_DAYS | 30 | 기억 압축 대상 비활성 일수 |
 | COMPRESS_MIN_GROUP | 3 | 압축 그룹 최소 크기. 이 수 미만이면 압축하지 않는다 |
 | RERANKER_MODEL | minilm | in-process 모드 ONNX 모델 선택. `minilm` (기본값, ~80MB, 영어 전용) 또는 `bge-m3` (~280MB, 다국어). **비영어권 사용자는 `bge-m3` 권장** — minilm은 영어 MS MARCO 데이터셋으로만 학습되어 한국어 등 비영어 파편 재순위화 품질이 저하됨. `RERANKER_ENABLED`는 별도 환경변수로 존재하지 않음. ONNX 모델 preload 성공 여부(또는 `RERANKER_URL` 설정 여부)로 자동 활성화된다 |
+| RERANKER_EXTERNAL_FALLBACK | skip | external 리랭커 3회 연속 실패 시 정책. `skip`(기본): in-process 전환 없이 `RERANKER_EXTERNAL_COOLDOWN_MS` 동안 external 호출 자체를 생략하고 원점수(RRF 순서)를 그대로 반환. `inprocess`: ONNX in-process 모드로 전환(opt-in, 이전 동작) |
+| RERANKER_EXTERNAL_COOLDOWN_MS | 60000 | `RERANKER_EXTERNAL_FALLBACK=skip`일 때의 쿨다운 유지 시간(ms). 창 만료 후 다음 recall이 external을 1건 재시도하며, 성공 시 정상 복귀·실패 시 쿨다운 재진입 |
+| QUOTA_NEAR_LIMIT_MARGIN | 10 | `QuotaChecker.check()`가 FOR UPDATE 정밀 검사로 전환하는 잔여 할당량 임계치. `remaining`이 이 값 이하일 때만 트랜잭션 락을 획득하며, 그 이상이면 10초 TTL 캐시(getUsage) 결과로 락 없이 통과한다 |
 | FRAGMENT_DEFAULT_LIMIT | 5000 | 새 API 키 생성 시 기본 파편 할당량 (기본: 5000, NULL=무제한) |
 | ENABLE_RECONSOLIDATION | false | ReconsolidationEngine 활성화. true 시 tool_feedback과 contradicts 감지 시 fragment_links weight/confidence를 동적 갱신한다 |
 | ENABLE_SPREADING_ACTIVATION | false | SpreadingActivation 활성화. true 시 recall의 contextText 파라미터로 관련 파편을 선제적 활성화한다. 레이턴시 영향 측정 후 활성화 권장 |
@@ -42,6 +45,7 @@
 | MEMENTO_REMEMBER_ATOMIC | false | true 시 remember()의 quota check + INSERT를 단일 트랜잭션으로 원자화. BEGIN → api_keys FOR UPDATE(quota 재검증) → INSERT → COMMIT 순서로 TOCTOU를 완전 차단. false(기본)는 선제 quota check만 수행하며 동시 요청이 드문 환경에 적합 |
 | MEMENTO_CASE_BACKPROP_ENABLED | false | true 시 CaseRewardBackprop 활성화. case verification 이벤트마다 증거 파편 importance를 자동 역전파. 비활성 시 호출 자체가 no-op(DB·메트릭 영향 0). DAG 일관성 베이스라인 확보 후 활성화 권장 |
 | MEMENTO_STORAGE | pgvector | storage 어댑터 선택. `pgvector`(기본, PgVectorStore) 또는 `sqlite-vec`(SqliteVecStore). 변경 시 서버 재시작 필요 |
+| MEMENTO_CONTEXT_ANCHOR_LIMIT | 10 | context 응답에 항상 포함되는 앵커(isAnchor) 파편의 최대 개수. 1~30 범위로 클램프되며 파싱 실패 시 10. 앵커는 tokenBudget 절삭 대상이 아니므로 이 개수 상한이 유일한 주입량 제한이다 |
 | MEMENTO_RECALL_MIN_SIM_FLOOR | (없음) | `SearchParamAdaptor.getMinSimilarity`가 반환하는 적응형 임계값에 옵트인 하한을 강제. 예: `0.45` 설정 시 학습값이 0.45 미만이어도 0.45 반환. 미설정 시 기존 동작 그대로 |
 | MIGRATION_LINT_FROM | (없음) | `npm run lint:migrations` 검사 cutoff override. 지정 마이그레이션 번호 이후분만 검사. 미설정 시 전체 검사 |
 | MEMENTO_MORPHEME_TOKENIZER | local | 형태소 토크나이저 경로 선택. `local`: garu-ko(한글)·natural PorterStemmer(영어)·@node-rs/jieba(중국어)·kuromoji(일본어) 로컬 CPU 분석기 사용(기본). `llm`: LLM 서브프로세스 경로(`MorphemeIndex._tokenizeViaLLM()`)로 전환. |
@@ -208,6 +212,12 @@ POSTGRES_* 접두어가 DB_* 접두어보다 우선한다. 두 형식을 혼용�
 
 이 기능은 `REDIS_ENABLED=true`일 때만 비동기로 동작한다. `REDIS_ENABLED=false` 환경에서는 `async=true` 파라미터를 전달해도 동기 모드로 처리된다.
 
+**총 문자수 게이트**: `fragments` 배열의 content 총 문자수가 `BATCH_REMEMBER_MAX_TOTAL_CHARS`(기본 200,000자)를 초과하면 sync/async 분기 이전에 배치 요청 전체가 즉시 거부된다. 항목별 4000자 상한(초과 항목만 개별 실패)과는 별개의 상한이며, 대량 배치의 처리 비용을 사전에 제한한다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| BATCH_REMEMBER_MAX_TOTAL_CHARS | 200000 | `batch_remember` fragments 배열 content 총 문자수 상한 |
+
 ### Redis
 
 | 변수 | 기본값 | 설명 |
@@ -243,6 +253,10 @@ POSTGRES_* 접두어가 DB_* 접두어보다 우선한다. 두 형식을 혼용�
 | GEMINI_API_KEY | (없음) | Google Gemini API 키. `EMBEDDING_PROVIDER=gemini` 시 사용 |
 | CF_ACCOUNT_ID | (없음) | Cloudflare 계정 ID. `EMBEDDING_PROVIDER=cloudflare` 시 필수 |
 | CF_API_TOKEN | (없음) | Cloudflare API 토큰. `EMBEDDING_PROVIDER=cloudflare` 시 필수 |
+| EMBEDDING_TIMEOUT_MS | 8000 | 임베딩 API 호출 1건당 절대 타임아웃(ms). `AbortSignal.timeout()`으로 적용되며 전체 데드라인 역할을 한다 |
+| EMBEDDING_MAX_RETRIES | 0 | OpenAI 호환 클라이언트의 자체 재시도 횟수. per-call 타임아웃이 이미 절대 데드라인이므로 재시도와 중첩되면 세마포어 점유 시간이 timeout × 재시도로 누적되는 것을 막기 위해 기본 0 |
+| EMBEDDING_CONCURRENCY | 6 | 프로세스 전역 임베딩 호출 동시성 상한. 임베딩 서비스 지연이 전체 요청 큐로 전파되는 것을 차단하는 세마포어 슬롯 수 |
+| EMBEDDING_SEM_WAIT_MS | 3000 | 임베딩 세마포어 슬롯 대기 타임아웃(ms). 초과 시 호출이 reject되고 `mcp_embedding_semaphore_wait_exceeded_total` 카운터가 증가한다 |
 
 ---
 

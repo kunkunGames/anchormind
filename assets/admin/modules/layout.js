@@ -9,6 +9,27 @@ import { state, navigate, renderView } from "./state.js";
 import { relativeTime } from "./format.js";
 import { logout } from "./auth.js";
 
+/**
+ * 오프캔버스 사이드바를 열거나 닫는다 (768px 이하 전용).
+ * @param {boolean} [force] - true=열기, false=닫기, 생략 시 토글
+ */
+export function toggleSidebar(force) {
+  const sb = document.getElementById("sidebar");
+  if (!sb) return;
+  const open = force ?? !sb.classList.contains("open");
+  sb.classList.toggle("open", open);
+  document.getElementById("sidebar-overlay")?.classList.toggle("visible", open);
+  document.getElementById("sidebar-toggle")?.setAttribute("aria-expanded", String(open));
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") toggleSidebar(false);
+});
+
+document.addEventListener("click", (e) => {
+  if (e.target?.id === "sidebar-overlay") toggleSidebar(false);
+});
+
 const NAV_ITEMS = [
   { id: "overview", label: "개요",       icon: "dashboard" },
   { id: "keys",     label: "API 키",     icon: "vpn_key" },
@@ -88,8 +109,8 @@ export function renderSidebar() {
   brand.className = "px-6 mb-8";
 
   const brandTitle = document.createElement("div");
-  brandTitle.className = "text-xl font-bold tracking-tighter text-cyan-400 font-headline";
-  brandTitle.textContent = "MEMENTO MCP";
+  brandTitle.className = "text-xl font-bold tracking-tighter text-primary font-headline";
+  brandTitle.textContent = "ANCHORMIND";
   brand.appendChild(brandTitle);
 
   const brandSub = document.createElement("div");
@@ -109,7 +130,7 @@ export function renderSidebar() {
     const isActive = n.id === state.currentView;
 
     if (isActive) {
-      item.className = "flex items-center gap-3 px-4 py-2.5 rounded-sm text-cyan-400 bg-cyan-400/10 border-l-2 border-cyan-400 transition-all duration-200";
+      item.className = "flex items-center gap-3 px-4 py-2.5 rounded-sm text-primary bg-primary/10 border-l-2 border-primary transition-all duration-200";
     } else {
       item.className = "flex items-center gap-3 px-4 py-2.5 rounded-sm text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-all duration-200";
     }
@@ -128,14 +149,14 @@ export function renderSidebar() {
     label.textContent = n.label;
     item.appendChild(label);
 
-    item.addEventListener("click", (e) => { e.preventDefault(); navigate(n.id); });
+    item.addEventListener("click", (e) => { e.preventDefault(); navigate(n.id); toggleSidebar(false); });
     nav.appendChild(item);
   });
   el.appendChild(nav);
 
   /* Bottom: Settings + Logout */
   const bottom = document.createElement("div");
-  bottom.className = "px-3 py-4 border-t border-cyan-500/10 space-y-1 mt-auto";
+  bottom.className = "px-3 py-4 border-t border-primary/10 space-y-1 mt-auto";
 
   const logoutItem = document.createElement("a");
   logoutItem.href = "#";
@@ -165,20 +186,37 @@ export function renderCommandBar() {
   const left = document.createElement("div");
   left.className = "flex items-center gap-4";
 
+  const menuBtn = document.createElement("button");
+  menuBtn.id = "sidebar-toggle";
+  menuBtn.className = "sidebar-toggle text-slate-400 hover:text-slate-200";
+  menuBtn.setAttribute("aria-expanded", "false");
+  menuBtn.setAttribute("aria-label", "메뉴 열기");
+  const menuIcon = document.createElement("span");
+  menuIcon.className = "material-symbols-outlined text-[22px]";
+  menuIcon.textContent = "menu";
+  menuBtn.appendChild(menuIcon);
+  menuBtn.addEventListener("click", () => toggleSidebar());
+  left.appendChild(menuBtn);
+
   const envBadge = document.createElement("span");
-  envBadge.className = "px-2 py-0.5 bg-cyan-400/10 text-cyan-400 border border-cyan-400/20 text-[10px] font-mono tracking-widest font-bold rounded-sm";
-  envBadge.textContent = "PRODUCTION";
+  envBadge.className = "px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 text-[10px] font-mono tracking-widest font-bold rounded-sm";
+  envBadge.textContent = "MASTER KEY";
   left.appendChild(envBadge);
 
+  /** /stats healthFlags 실측 기반 상태 표시. stats 미로드 시 -- */
+  const flags   = state.stats?.healthFlags ?? null;
+  const healthy = Array.isArray(flags) && flags.length === 0;
   const healthDot = document.createElement("div");
   healthDot.className = "flex items-center gap-2";
   const dot = document.createElement("div");
-  dot.className = "w-1.5 h-1.5 bg-tertiary rounded-full pulsing-glow";
-  dot.style.color = "#00fabf";
+  dot.className = "w-1.5 h-1.5 rounded-full " + (flags == null ? "bg-slate-600" : healthy ? "bg-tertiary" : "bg-error");
   healthDot.appendChild(dot);
   const healthText = document.createElement("span");
   healthText.className = "text-xs font-mono text-slate-400 uppercase tracking-tighter";
-  healthText.textContent = "HEALTH: ONLINE";
+  healthText.textContent = flags == null
+    ? "HEALTH: --"
+    : healthy ? "HEALTH: OK" : `HEALTH: ${flags.length} FLAG${flags.length > 1 ? "S" : ""}`;
+  if (!healthy && Array.isArray(flags) && flags.length > 0) healthText.title = flags.join(", ");
   healthDot.appendChild(healthText);
   left.appendChild(healthDot);
 
@@ -198,38 +236,31 @@ export function renderCommandBar() {
   right.className = "flex items-center gap-4";
 
   const refreshBtn = document.createElement("button");
-  refreshBtn.className = "text-slate-400 hover:text-cyan-400 transition-all";
+  refreshBtn.className = "text-slate-400 hover:text-primary transition-all";
   const refreshIcon = document.createElement("span");
   refreshIcon.className = "material-symbols-outlined";
   refreshIcon.textContent = "refresh";
   refreshBtn.appendChild(refreshIcon);
-  refreshBtn.addEventListener("click", () => renderView());
+  refreshBtn.addEventListener("click", async () => {
+    renderView();
+    const { api } = await import("./api.js");
+    const res = await api("/stats");
+    if (res.ok) {
+      state.stats = res.data;
+      state.lastUpdated = Date.now();
+      renderCommandBar();
+    }
+  });
   right.appendChild(refreshBtn);
 
   const divider = document.createElement("div");
   divider.className = "h-8 w-px bg-white/10";
   right.appendChild(divider);
 
-  const userInfo = document.createElement("div");
-  userInfo.className = "flex items-center gap-3";
-  const userText = document.createElement("div");
-  userText.className = "text-right";
-  const userName = document.createElement("div");
-  userName.className = "text-xs font-bold text-slate-200 font-headline";
-  userName.textContent = "ADMIN_ROOT";
-  userText.appendChild(userName);
-  const userLevel = document.createElement("div");
-  userLevel.className = "text-[8px] font-mono text-slate-500";
-  userLevel.textContent = "LVL 4 ACCESS";
-  userText.appendChild(userLevel);
-  userInfo.appendChild(userText);
-
   const userIcon = document.createElement("span");
   userIcon.className = "material-symbols-outlined text-slate-400 text-3xl";
   userIcon.textContent = "account_circle";
-  userInfo.appendChild(userIcon);
-
-  right.appendChild(userInfo);
+  right.appendChild(userIcon);
 
   el.appendChild(right);
 }

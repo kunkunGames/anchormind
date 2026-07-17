@@ -238,9 +238,9 @@ function renderLogViewer(lines) {
     content.appendChild(empty);
   } else {
     const levelColors = {
-      info:  "text-cyan-400",
-      warn:  "text-[#dcb8ff]",
-      error: "text-[#ffb4ab]",
+      info:  "text-secondary",
+      warn:  "text-primary",
+      error: "text-[#cc7755]",
       debug: "text-slate-600"
     };
 
@@ -341,7 +341,7 @@ function renderLogSidebar(files, stats) {
 
       const sizeEl = document.createElement("span");
       sizeEl.className = "text-[10px] text-slate-500";
-      sizeEl.textContent = fmtBytes(f.sizeBytes);
+      sizeEl.textContent = fmtBytes(f.size);
       row.appendChild(sizeEl);
 
       fileList.appendChild(row);

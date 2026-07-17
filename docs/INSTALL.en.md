@@ -11,7 +11,7 @@ The fastest path for someone new to this repository is to hand the work to an AI
 
 **Clean install (first-time setup)**
 
-> "Clone the memento-mcp repository (`https://github.com/JinHo-von-Choi/memento-mcp`) into my environment, read `docs/INSTALL.en.md` and `SKILL.md`, and do the following:
+> "Clone the anchormind repository (`https://github.com/JinHo-von-Choi/anchormind`) into my environment, read `docs/INSTALL.en.md` and `SKILL.md`, and do the following:
 >
 > 1. Verify system prerequisites (Node.js, PostgreSQL, Redis)
 > 2. Run `npm install` and `bash setup.sh` to install dependencies and generate `.env`
@@ -435,7 +435,7 @@ For external access, expose the service through a reverse proxy (TLS termination
 
 ## Hook-Based Context Loading
 
-Memento's `instructions` field encourages the AI to use memory tools actively, but this alone doesn't automatically inject past memories at session start. With Claude Code hooks, you can ensure the AI loads relevant context at the beginning of every session.
+AnchorMind's `instructions` field encourages the AI to use memory tools actively, but this alone doesn't automatically inject past memories at session start. With Claude Code hooks, you can ensure the AI loads relevant context at the beginning of every session.
 
 **Auto-load Core Memory on session start** (`~/.claude/settings.json`):
 

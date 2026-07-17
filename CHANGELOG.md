@@ -1,5 +1,95 @@
 # Changelog
 
+## [5.2.3] - 2026-07-16
+
+### Changed
+- `semanticSearch.minSimilarity` 기본값 0.5→0.4. 12쿼리 골드셋 실측에서 상위5 유용 결과 수가 최대인 지점으로, 어휘 중첩이 낮은 회상형 질의의 무응답을 줄인다(0.35는 노이즈 유입이 이득을 상쇄해 기각). SearchParamAdaptor 기존 학습 행도 0.4 상한으로 동기화됐다.
+
+## [5.2.2] - 2026-07-16
+
+### Fixed
+- text/mixed recall의 RRF importance 컷오프가 기준값 미지정 시 모든 후보를 탈락시키던 문제 수정. 기준 미지정 시 no-op으로 동작하며, `rrfSearch.candidateMinImportance`(기본 0.1)를 정책값으로 명시한다.
+- `extractKeywords`가 한글 토큰의 조사 접미를 제거하고, 카멜/스네이크 케이스 코드 식별자를 소문자화 없이 원형 보존한다.
+
+### Added
+- morpheme_indexed 백필 잡: 5분 주기로 미인덱싱 파편을 배치(기본 500) 처리해 형태소 L3 커버리지를 회복한다. embedding-consistency 경고에 백필 잡 상태가 병기된다.
+- 마이그레이션 스크립트 3종(dryRun 기본): reflect 파편 keywords 재추출(`scripts/reextract-reflect-keywords.js`), reflect permanent TTL 강등, SearchParamAdaptor min_similarity 리셋.
+- recall 품질 검증 지표 SQL과 스모크 절차 문서(`docs/operations/recall-quality-verification.md`, `scripts/recall-quality-metrics.sql`).
+
+### Changed
+- reflect decision 파편 importance 0.8→0.7, `reflectionPolicy.maxImportance` 0.3→0.55 — reflect 파편의 permanent 승격을 차단하고 정리 주기가 실제로 동작하게 한다.
+
+## [5.2.1] - 2026-07-16
+
+### Fixed
+- `recall`의 `fields` sparse 목록이 응답에 적용되지 않던 문제 수정. 필드 선택이 응답 프로젝션에서 최종 적용되며, 파생 키(`confidence`, `age_days`)와 `keywords`(이 경우 `includeKeywords` 없이도 포함)·`valid_to`·`affect`·`ema_activation`도 요청 시 반환된다.
+- `key_id`가 `includeKeyName` 미지정 시에도 recall 응답에 포함되던 문제 수정. `key_id`·`key_name` 모두 `includeKeyName=true`일 때만 포함된다.
+
+## [5.2.0] - 2026-07-16
+
+### Added
+- `recall`·`context`에 `includeKeyName` 파라미터: true 시 각 파편에 `key_id`·`key_name`(액세스 키 라벨)을 포함한다. 같은 키 그룹 스코프의 정보만 노출되며 기본 false. `recall`의 `fields` sparse 목록에도 `key_id`/`key_name`을 지정할 수 있다.
+- 임베딩 API 호출에 per-call 절대 타임아웃(`EMBEDDING_TIMEOUT_MS`, 기본 8000ms)과 프로세스 전역 동시성 세마포어(`EMBEDDING_CONCURRENCY`/`EMBEDDING_SEM_WAIT_MS`)를 적용해 임베딩 서비스 지연이 전체 요청 큐로 전파되는 것을 차단. 세마포어 대기 초과는 `mcp_embedding_semaphore_wait_exceeded_total`로 관측 가능.
+- `initialize`(무세션) 요청에 인증·DB 조회 이전 IP rate limit 선차단 추가. 차단 시 429 응답과 함께 `mcp_initialize_ip_rate_limited_total` 카운터가 증가한다.
+- `batch_remember`에 배열 전체 content 총 문자수 게이트(`BATCH_REMEMBER_MAX_TOTAL_CHARS`, 기본 200,000자) 추가. 항목별 4000자 상한과 별개로 요청 전체를 사전에 거부한다.
+- `QuotaChecker.check()`에 캐시 우선 판정 경로 추가: 잔여 할당량이 `QUOTA_NEAR_LIMIT_MARGIN`(기본 10)보다 크면 FOR UPDATE 트랜잭션 없이 통과하며, 이 경로는 `mcp_quota_cache_pass_total`로 관측된다. 한도 임박 시에만 기존 정밀 검사로 전환된다.
+- `EmbeddingWorker`가 remember() 동기 경로에서 이미 생성된 임베딩 벡터를 캐시로 재사용하여 동일 파편에 대한 중복 임베딩 API 호출을 제거.
+- 관리자 REST에 키 스코프 파편 조회·검색·통계·내보내기 엔드포인트 추가(`key_id`/`group_id` 스코프 적용).
+
+### Changed
+- 외부 reranker 3연속 실패 시 기본 정책을 in-process 전환에서 쿨다운 스킵으로 변경(`RERANKER_EXTERNAL_FALLBACK=skip`, 기본값). 쿨다운(`RERANKER_EXTERNAL_COOLDOWN_MS`, 기본 60초) 동안 external 호출을 생략하고 원점수(RRF 순서)를 유지하며, 만료 후 1건 재시도한다. `RERANKER_EXTERNAL_FALLBACK=inprocess`로 이전 동작(ONNX in-process 전환) 유지 가능.
+- 관리 콘솔 메모리 뷰: 1024px 미만 화면에서 Fragment Detail이 하단 고정 시트로 표시된다. 닫기 버튼과 ESC로 닫을 수 있으며 데스크톱 레이아웃은 동일하다.
+- admin API의 CORS 허용 origin을 화이트리스트 반사 방식으로 처리하고 인증 실패를 로깅한다(`ADMIN_ALLOWED_ORIGINS`).
+
+### Fixed
+- 외부 reranker의 TEI(text-embeddings-inference) 호환: 요청에 `texts` 필드를 `documents`와 함께 전송하고, `[{ index, score }]` 배열 응답을 매핑하며, 빈 바디 `/health`를 허용한다 (#22, @itismyfield 기여).
+- 외부 rerank 배열 응답 처리: 빈 배열은 실패로 간주해 폴백 경로를 타고, `index` 범위와 `score` 타입이 유효한 항목만 반영한다.
+
+## [5.0.1] - 2026-07-15
+
+### Added
+- 프로세스 전역 에러 가드(`lib/process-guards.js`): `unhandledRejection`은 로깅 후 프로세스를 유지하고, `uncaughtException`은 로깅 후 graceful shutdown을 exit code 1로 수행한다(onFatal 1회 보장, 35초 강제 종료 타이머). SIGTERM/SIGINT 경로는 기존과 동일하게 exit 0으로 종료한다.
+
+### Changed
+- 전이 의존성 lockfile 갱신 (hono 4.12.30, protobufjs 7.6.5, tar 7.5.20).
+
+## [5.0.0] - 2026-07-14
+
+### Changed
+- 프로젝트명을 AnchorMind로 변경 (패키지명 anchormind-mcp). memento-mcp라는 이름이 다수의 동명·유사 프로젝트와 겹쳐 개명했으며, 도구명·환경 변수(MEMENTO_*)·DB 스키마·API 경로·키 형식(mmcp_) 등 런타임 계약은 모두 그대로다 (Breaking 없음).
+- CLI bin에 `anchormind` 명령 추가. 기존 `memento-mcp` 명령은 별칭으로 유지.
+- MCP initialize 응답의 serverInfo.name을 `anchormind-server`로 변경 (표시 메타데이터).
+- admin 콘솔·로그인 화면 브랜딩과 README 로고를 AnchorMind로 교체.
+- README·SKILL.md·docs 전반의 표기를 현행 코드 기준으로 정비.
+
+## [4.10.0] - 2026-07-14
+
+### Added
+- `recall`에 `includePeerAgents` 파라미터: true 시 같은 API 키/workspace 스코프 내 다른 agentId의 파편도 검색에 포함한다(기본 false, 키·workspace 경계는 유지). L1 키워드·topic·L2 시맨틱·형태소 hydrate·시간 범위 경로에 일괄 적용.
+- recall 응답 `_meta.hints`에 `contradiction_pending` 신호: 반환 파편에 미해결 contradicts 링크가 있으면 amend 정리를 권고한다. 힌트 우선순위는 no_results > contradiction_pending > stale_results > consider_context.
+- `reconstruct_history` 타임라인 항목과 관리자 `/memory/graph` 노드에 `agent_id` 필드 포함 — 멀티에이전트 케이스의 기여 에이전트 식별.
+- SKILL.md에 "멀티에이전트 협업" 섹션 신설(`get_skill_guide(section="collaboration")`).
+
+## [4.9.0] - 2026-07-14
+
+### Added
+- 관리자 API `GET /memory/fragments/:id`: 파편 전문·keywords·메타·1-hop 링크를 반환하는 상세 조회. `key_id`/`group_id` 스코프를 적용하며 스코프 밖 id는 404.
+- 관리자 API `GET /memory/fragments`에 `q` 파라미터: content 본문 부분 일치 검색(ILIKE, 와일드카드 이스케이프).
+- `MEMENTO_CONTEXT_ANCHOR_LIMIT` 환경 변수: context 응답에 포함되는 앵커 파편 개수 설정(기본 10, 1~30 클램프). `config/memory.js contextInjection.maxAnchorFragments`.
+- admin 메모리 뷰: 본문 검색 입력(Enter 실행 지원), 파편 클릭 시 상세 인스펙터(전문·keywords·링크·그래프 뷰 이동), EXPORT JSONL 다운로드 버튼, episode/relation 타입 필터.
+- admin 사이드바 오프캔버스 토글: 768px 이하에서 메뉴 버튼·오버레이·ESC로 여닫는다.
+
+### Changed
+- (Breaking) `GET /export`는 `key_id` 또는 `group_id` 지정이 필요하다. 전체 반출은 `confirm=full`을 명시한 경우에만 수행한다. `group_id`·`type` 파라미터가 추가되고 `topic`은 부분 일치(ILIKE)로 동작한다.
+- `GET /memory/fragments` 목록 응답에 `content`(200자 절삭)·`keywords`·`access_count` 필드가 포함된다.
+- admin 메모리 뷰의 Retrieval Analytics와 Search Activity 패널이 `GET /memory/search-events` 데이터(검색량·zero-result 비율·레이턴시 분위수·경로 분포·상위 키워드)를 표시한다. 값이 없으면 `--`로 표시한다.
+- structured context의 `rankedInjection`이 앵커 파편을 상단 고정으로 반환한다.
+- admin 사이드바 활성 하이라이트가 뷰 전환 시 즉시 갱신된다.
+- admin 콘솔 디자인 시스템 교체: JetBrains Mono 단일 폰트, 플랫 헤어라인 패널, amber 액센트 팔레트, 파편 클릭 시 목록 부분 렌더(스크롤 유지).
+
+### Fixed
+- Docker 이미지에 SKILL.md가 포함되어 컨테이너에서 `get_skill_guide`가 동작한다.
+
 ## [4.8.0] - 2026-07-04
 
 ### Added

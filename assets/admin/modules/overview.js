@@ -100,7 +100,7 @@ export function renderHealthPanel(stats) {
   function barFillClass(pct) {
     if (pct > 85) return "bg-error";
     if (pct > 60) return "bg-tertiary/40";
-    return "bg-cyan-500/40";
+    return "bg-primary/40";
   }
 
   [
@@ -195,8 +195,8 @@ export function renderTimeline(activities) {
   const list = document.createElement("div");
   list.className = "divide-y divide-white/5";
 
-  const typeColors = { fact: "bg-cyan-400", error: "bg-tertiary", decision: "bg-secondary", procedure: "bg-slate-500", preference: "bg-cyan-400" };
-  const badgeColors = { fact: "border-cyan-400/30 text-cyan-400", error: "border-tertiary/30 text-tertiary", decision: "border-secondary/30 text-secondary", procedure: "border-slate-400/30 text-slate-400", preference: "border-cyan-400/30 text-cyan-400" };
+  const typeColors = { fact: "bg-primary", error: "bg-tertiary", decision: "bg-secondary", procedure: "bg-slate-500", preference: "bg-primary" };
+  const badgeColors = { fact: "border-primary/30 text-primary", error: "border-tertiary/30 text-tertiary", decision: "border-secondary/30 text-secondary", procedure: "border-slate-400/30 text-slate-400", preference: "border-primary/30 text-primary" };
 
   activities.forEach(a => {
     const row = document.createElement("div");
@@ -289,8 +289,7 @@ export function renderRiskPanel(stats) {
 
   /* Normal items */
   [
-    { label: "Quality Pending", value: fmt(queues.qualityPending ?? 0) },
-    { label: "Decay Queue",     value: fmt(queues.decayQueue ?? 0) }
+    { label: "Quality Pending", value: fmt(queues.qualityPending ?? 0) }
   ].forEach(n => {
     const item = document.createElement("div");
     item.className = "flex items-center justify-between p-2.5 bg-surface-container border border-white/5";
@@ -311,7 +310,7 @@ export function renderRiskPanel(stats) {
 
 export function renderQuickActions() {
   const panel = document.createElement("section");
-  panel.className = "glass-panel bg-gradient-to-br from-surface-container to-surface-container-high";
+  panel.className = "glass-panel";
 
   /* Header */
   const header = document.createElement("div");
@@ -356,23 +355,36 @@ export function renderQuickActions() {
   return panel;
 }
 
-export function renderLatencyIndex() {
+export function renderLatencyIndex(stats) {
   const panel = document.createElement("div");
   panel.className = "glass-panel p-4";
 
   const label = document.createElement("div");
   label.className = "text-[10px] font-mono text-slate-500 mb-3 tracking-widest uppercase";
-  label.textContent = "Latency Index (L1/L2/L3)";
+  label.textContent = "Search Latency p50 (ms)";
   panel.appendChild(label);
 
+  const sm = stats?.searchMetrics ?? null;
+  const layers = [
+    { key: "L1", cls: "bg-primary/20 hover:bg-primary/40 border-t-2 border-primary" },
+    { key: "L2", cls: "bg-secondary/20 hover:bg-secondary/40 border-t-2 border-secondary" },
+    { key: "L3", cls: "bg-tertiary/20 hover:bg-tertiary/40 border-t-2 border-tertiary" }
+  ].map(l => ({ ...l, p50: sm?.[l.key]?.p50 ?? null }));
+
+  const known = layers.filter(l => l.p50 != null);
+  if (known.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "text-[11px] text-slate-600 font-mono py-4";
+    empty.textContent = "--";
+    panel.appendChild(empty);
+    return panel;
+  }
+
+  const maxP50 = Math.max(...known.map(l => Number(l.p50)), 1);
   const bars = document.createElement("div");
   bars.className = "flex items-end gap-2 h-16";
 
-  [
-    { cls: "bg-primary/20 hover:bg-primary/40 border-t-2 border-primary", h: "20%", tip: "L1" },
-    { cls: "bg-secondary/20 hover:bg-secondary/40 border-t-2 border-secondary", h: "45%", tip: "L2" },
-    { cls: "bg-tertiary/20 hover:bg-tertiary/40 border-t-2 border-tertiary", h: "85%", tip: "L3" }
-  ].forEach(b => {
+  layers.forEach(b => {
     const barWrap = document.createElement("div");
     barWrap.className = "flex-1 relative group";
     barWrap.style.height = "100%";
@@ -381,11 +393,11 @@ export function renderLatencyIndex() {
     const bar = document.createElement("div");
     bar.className = b.cls;
     bar.style.width = "100%";
-    bar.style.height = b.h;
+    bar.style.height = b.p50 != null ? Math.max(6, Math.round((Number(b.p50) / maxP50) * 100)) + "%" : "0%";
     barWrap.appendChild(bar);
     const tooltip = document.createElement("span");
     tooltip.className = "absolute -top-4 text-[8px] font-mono hidden group-hover:block";
-    tooltip.textContent = b.tip;
+    tooltip.textContent = b.p50 != null ? `${b.key} ${Math.round(Number(b.p50))}ms` : `${b.key} --`;
     barWrap.appendChild(tooltip);
     bars.appendChild(barWrap);
   });
@@ -394,17 +406,21 @@ export function renderLatencyIndex() {
   return panel;
 }
 
-export function renderQualityCoverage() {
+export function renderQualityCoverage(stats) {
   const panel = document.createElement("div");
   panel.className = "glass-panel p-4 flex items-center gap-4";
+
+  const q     = stats?.quality ?? null;
+  const total = Number(q?.total) || 0;
+  const ratio = total > 0 ? (Number(q.verified) || 0) / total : null;
 
   /* SVG donut */
   const svgWrap = document.createElement("div");
   svgWrap.className = "relative";
   const svgNS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(svgNS, "svg");
-  svg.setAttribute("class", "w-16 h-16");
-  svg.setAttribute("viewBox", "0 0 64 64");
+  svg.setAttribute("width", "64");
+  svg.setAttribute("height", "64");
 
   const circleBg = document.createElementNS(svgNS, "circle");
   circleBg.setAttribute("cx", "32");
@@ -412,7 +428,7 @@ export function renderQualityCoverage() {
   circleBg.setAttribute("r", "28");
   circleBg.setAttribute("fill", "none");
   circleBg.setAttribute("stroke-width", "4");
-  circleBg.setAttribute("class", "text-slate-800");
+  circleBg.setAttribute("class", "text-white/10");
   circleBg.setAttribute("stroke", "currentColor");
   svg.appendChild(circleBg);
 
@@ -425,14 +441,14 @@ export function renderQualityCoverage() {
   circleFg.setAttribute("class", "text-primary");
   circleFg.setAttribute("stroke", "currentColor");
   circleFg.setAttribute("stroke-dasharray", "175.9");
-  circleFg.setAttribute("stroke-dashoffset", String(175.9 * 0.25));
+  circleFg.setAttribute("stroke-dashoffset", String(175.9 * (1 - (ratio ?? 0))));
   circleFg.setAttribute("transform", "rotate(-90 32 32)");
   svg.appendChild(circleFg);
   svgWrap.appendChild(svg);
 
   const centerText = document.createElement("div");
   centerText.className = "absolute inset-0 flex items-center justify-center text-[10px] font-bold";
-  centerText.textContent = "75%";
+  centerText.textContent = ratio != null ? Math.round(ratio * 100) + "%" : "--";
   svgWrap.appendChild(centerText);
   panel.appendChild(svgWrap);
 
@@ -440,11 +456,11 @@ export function renderQualityCoverage() {
   const textWrap = document.createElement("div");
   const textLabel = document.createElement("div");
   textLabel.className = "text-[10px] font-mono text-slate-400 uppercase";
-  textLabel.textContent = "Quality Coverage";
+  textLabel.textContent = "Quality Verified";
   textWrap.appendChild(textLabel);
   const textVal = document.createElement("div");
   textVal.className = "text-xs text-slate-200 mt-1 font-bold";
-  textVal.textContent = "Optimal Signal";
+  textVal.textContent = ratio != null ? fmt(Number(q.verified) || 0) + " / " + fmt(total) + " fragments" : "--";
   textWrap.appendChild(textVal);
   panel.appendChild(textWrap);
 
@@ -463,24 +479,27 @@ export function renderTopTopics(stats) {
   const list = document.createElement("div");
   list.className = "space-y-2";
 
-  const topics = stats?.topTopics ?? [
-    { name: "architecture", pct: "32%" },
-    { name: "error-handling", pct: "24%" },
-    { name: "deployment", pct: "18%" },
-    { name: "security", pct: "14%" },
-    { name: "performance", pct: "12%" }
-  ];
+  const topics = stats?.topTopics ?? [];
+  const total  = Number(stats?.fragments) || 0;
+
+  if (topics.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "text-[11px] text-slate-600 font-mono";
+    empty.textContent = "--";
+    list.appendChild(empty);
+  }
 
   topics.forEach(t => {
     const row = document.createElement("div");
     row.className = "flex justify-between items-center text-[10px] font-mono";
     const name = document.createElement("span");
     name.className = "text-slate-300";
-    name.textContent = t.name;
+    name.textContent = t.topic ?? "(무제)";
     row.appendChild(name);
     const pct = document.createElement("span");
     pct.className = "text-slate-500";
-    pct.textContent = t.pct;
+    const cnt = Number(t.count) || 0;
+    pct.textContent = total > 0 ? Math.round((cnt / total) * 100) + "%" : String(cnt);
     row.appendChild(pct);
     list.appendChild(row);
   });
@@ -529,8 +548,8 @@ export async function renderOverview(container) {
   rightCol.className = "w-full lg:w-80 space-y-6";
   rightCol.appendChild(renderRiskPanel(state.stats));
   rightCol.appendChild(renderQuickActions());
-  rightCol.appendChild(renderLatencyIndex());
-  rightCol.appendChild(renderQualityCoverage());
+  rightCol.appendChild(renderLatencyIndex(state.stats));
+  rightCol.appendChild(renderQualityCoverage(state.stats));
   rightCol.appendChild(renderTopTopics(state.stats));
   mainLayout.appendChild(rightCol);
 

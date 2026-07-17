@@ -1,10 +1,10 @@
-# Memento MCP Skill Reference
+# AnchorMind Skill Reference
 
-AI 에이전트가 Memento MCP 기억 서버를 최대 효율로 활용하기 위한 기술 레퍼런스.
+AI 에이전트가 AnchorMind 기억 서버를 최대 효율로 활용하기 위한 기술 레퍼런스.
 
-## 현재 버전: v4.7.0
+## 현재 버전: v5.0.1
 
-Memento MCP 서버는 AI 에이전트의 세션 간 장기 기억을 파편(Fragment) 단위로 영속화하고, 20개 도구를 통해 저장·검색·연결·반성 기능을 제공한다.
+AnchorMind 서버는 AI 에이전트의 세션 간 장기 기억을 파편(Fragment) 단위로 영속화하고, 20개 도구를 통해 저장·검색·연결·반성 기능을 제공한다.
 
 주요 현재 기능:
 
@@ -60,7 +60,7 @@ recall / context 응답 메타데이터는 `_meta.searchEventId` / `_meta.hints`
 선제적 컨텍스트 사냥 예시:
 
 ```
-사용자: "Memento MCP에 새 기능 하나 추가하려고 해"
+사용자: "AnchorMind에 새 기능 하나 추가하려고 해"
 ↓
 1. recall(topic="memento-mcp", contextText="새 기능 추가 계획")
 2. recall(type="decision", topic="memento-mcp")
@@ -196,7 +196,7 @@ recall 호출
 
 #### 원격 CLI
 
-로컬 Memento 서버 없이 원격 서버에 직접 연결한다.
+로컬 AnchorMind 서버 없이 원격 서버에 직접 연결한다.
 
 ```bash
 # 환경변수 방식 (영구 설정에 적합)
@@ -263,7 +263,7 @@ top-level `_searchEventId` / `_memento_hint` / `_suggestion` mirror 필드는 �
 }
 ```
 
-화이트리스트 17개: id / content / type / topic / keywords / importance / created_at / access_count / confidence / linked / explanations / workspace / context_summary / case_id / valid_to / affect / ema_activation.
+화이트리스트 19개: id / content / type / topic / keywords / importance / created_at / access_count / confidence / linked / explanations / workspace / context_summary / case_id / valid_to / affect / ema_activation / key_id / key_name.
 
 #### idempotencyKey
 
@@ -420,7 +420,7 @@ Symbolic Verification Layer는 확률론적 검색 파이프라인 위에 추가
 
 ## 서버 개요
 
-Memento MCP는 MCP(Model Context Protocol) 기반의 장기 기억 서버다. AI 에이전트의 세션 간 지식을 파편(Fragment) 단위로 영속화하고, 3계층 검색(키워드 L1 -> 시맨틱 L2 -> 하이브리드 RRF L3)으로 맥락에 맞는 기억을 회상한다.
+AnchorMind는 MCP(Model Context Protocol) 기반의 장기 기억 서버다. AI 에이전트의 세션 간 지식을 파편(Fragment) 단위로 영속화하고, 3계층 검색(키워드 L1 -> 시맨틱 L2 -> 하이브리드 RRF L3)으로 맥락에 맞는 기억을 회상한다.
 
 ### 핵심 개념
 
@@ -440,6 +440,7 @@ Memento MCP는 MCP(Model Context Protocol) 기반의 장기 기억 서버다. AI
 ```
 context() 호출
 -> core_memory: 앵커 + 고중요도 파편 (preference, error, procedure)
+   (앵커는 중요도순 상위 N개가 항상 포함된다. N은 서버의 MEMENTO_CONTEXT_ANCHOR_LIMIT 설정, 기본 10)
 -> working_memory: 현재 세션의 워킹 메모리
 -> system_hints: 미반영 세션 경고, 시스템 알림
 ```
@@ -784,6 +785,17 @@ curl 응답 검증 체크:
 - keywords에 플랫폼명 포함: `["memento-mcp", "claude-code", "my-host"]`
 - recall 시 플랫폼 필터: `recall(keywords=["claude-code"])`
 
+## 멀티에이전트 협업
+
+여러 에이전트(또는 여러 플랫폼의 세션)가 하나의 팀 기억을 공유할 때의 운영 패턴. 별도 기능 없이 현행 도구만으로 동작한다.
+
+1. 같은 API 키 또는 같은 키 그룹 + 동일 workspace를 사용한다. 파편 공유 범위는 키 그룹 단위다.
+2. 공동 작업은 동일 caseId를 공유하고, 진행 파편은 즉시 remember한다(기본 scope=permanent — 저장 즉시 상대 에이전트가 recall로 조회 가능). scope=session 파편은 세션 전용 스크래치라 공유되지 않는다.
+3. agentId 정책을 통일한다(default 또는 팀 고정 ID). 에이전트마다 다른 agentId를 쓰면 recall의 agent 필터 때문에 상대 파편이 검색에서 제외된다.
+4. 중간 가설은 assertionStatus="inferred"로 저장하고, 검증한 에이전트가 amend로 verified/rejected 전환한다. 미검증 가설과 확정 사실을 섞지 않는 것이 협업 오염 방지의 핵심이다.
+5. 상대 에이전트의 파편이 유용했으면 tool_feedback(relevant=true)을 보낸다 — 링크 가중치 강화가 팀 검색 품질을 누적 개선한다.
+6. 전체 흐름 복기는 reconstruct_history(caseId) 또는 recall(caseMode=true). 모순 발견 시 link(relationType="contradicts") 명시 후 대표 파편을 amend로 정리한다.
+
 ## Codex Desktop / Deferred Tool Discovery (클라이언트 호환)
 
 Codex Desktop 등 일부 MCP 클라이언트는 도구를 deferred/lazy 로딩한다. tool_search가 검색어와 limit에 따라 그 턴에 일부 도구만 노출하므로, 서버 tools/list에 분명히 존재하는 recall이 저장 편향 쿼리+낮은 limit에서 빠질 수 있다.
@@ -840,7 +852,7 @@ RBAC default-deny: 도구 맵에 등록되지 않은 도구를 호출하면 `"Ac
 
 | 이름 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| fragments | array | O | [{content, topic, type, importance?, keywords?}] 최대 200건. 항목별 content가 4000자를 초과하면 해당 항목만 -32602로 실패 처리되고 나머지 항목은 정상 저장된다. |
+| fragments | array | O | [{content, topic, type, importance?, keywords?}] 최대 200건. 항목별 content가 4000자를 초과하면 해당 항목만 -32602로 실패 처리되고 나머지 항목은 정상 저장된다. 배열 전체의 content 총 문자수가 상한(기본 200,000자, `BATCH_REMEMBER_MAX_TOTAL_CHARS`)을 초과하면 sync/async 분기 이전에 요청 전체가 거부된다(항목별 4000자 게이트와 별개). |
 | async | boolean | - | true 시 비동기 모드. 선검증 후 Redis 큐 적재, `{async, accepted, jobId}` 즉시 반환. 워커가 ack·재시도(최대 3회)·dead-letter·기동 복구로 at-least-once 처리. 기본 false(동기). Redis 비활성 시 동기 폴백. |
 | stream | boolean | - | deprecated. 더 이상 SSE progress 이벤트를 보내지 않는다. 무시됨. |
 | agentId | string | - | 에이전트 ID |
@@ -864,6 +876,8 @@ async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기�
 | linkRelationType | string | - | 연결 관계 필터 (related, caused_by, resolved_by, part_of, contradicts) |
 | threshold | number | - | similarity 임계값 0~1 |
 | includeSuperseded | boolean | - | 만료 파편 포함. 기본 false. |
+| includePeerAgents | boolean | - | true 시 같은 키/workspace 스코프 내 다른 agentId 파편 포함 (멀티에이전트 협업용). 키·workspace 경계는 유지. 기본 false. |
+| includeKeyName | boolean | X | true 시 각 파편에 key_id·key_name(액세스 키 라벨) 포함. 같은 키 그룹 스코프의 정보만 노출. 팀 공유 workspace에서 파편 생성 주체 식별용. 기본 false |
 | asOf | string | - | ISO 8601. 해당 시점에 가까운 파편을 상위로 올리는 시간 근접 랭킹 기준(anchorTime)으로만 작동. 주의: 그 시점에 유효했던 버전을 복원하는 bitemporal as-of 필터가 아니며, 과거 시점 스냅샷 조회는 미구현. 특정 기간의 파편을 실제로 한정하려면 timeRange를 쓴다. |
 | timeRange | object | - | {from, to} 생성시각(created_at) 기준 시간창 필터. ISO 8601과 한국어 자연어("3일 전","지난 주","오늘") 모두 지원. 지정 시 시간 검색 경로가 동작하고 RRF에서 시간 근접 가중이 부스트된다. |
 | cursor | string | - | 페이지네이션 커서 |
@@ -954,6 +968,7 @@ summary 또는 sessionId 중 하나 이상 필수.
 | types | string[] | - | 기본: preference, error, procedure |
 | sessionId | string | - | 워킹 메모리 로드용 |
 | structured | boolean | - | 계층 구조 반환. 기본 false. |
+| includeKeyName | boolean | X | true 시 fragments 각 항목에 key_id·key_name(액세스 키 라벨) 포함. structured=true 트리 응답에는 적용되지 않음. 기본 false |
 | agentId | string | - | 에이전트 ID |
 | workspace | string | - | 컨텍스트 로드 범위. 지정 시 해당 workspace + 전역(NULL) 파편만 포함. |
 
@@ -1034,7 +1049,7 @@ id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permissio
 | workspace | string | - | 워크스페이스 필터 |
 
 반환값:
-- `ordered_timeline`: 시간순 파편 배열
+- `ordered_timeline`: 시간순 파편 배열 (각 항목에 agent_id 포함 — 멀티에이전트 케이스에서 기여 에이전트 식별용)
 - `causal_chains`: BFS 인과 체인 배열 `{ root_id, chain[], length, is_resolved }`
 - `unresolved_branches`: 미해결 파편 + error_observed 이벤트 배열
 - `supporting_fragments`: 체인에 포함되지 않은 나머지 파편
@@ -1528,6 +1543,7 @@ recall 또는 context 응답의 `_meta.hints` 필드를 읽는다:
 | signal | 의미 | 권장 행동 |
 |--------|------|----------|
 | no_results | 관련 기억 없음 | 작업 완료 후 remember |
+| contradiction_pending | 반환 파편에 미해결 contradicts 링크 | 상충 파편 확인 후 amend 정리 또는 잘못된 쪽 forget |
 | stale_results | 30일+ 경과 파편 | amend로 갱신 또는 forget |
 | consider_context | 파편 5개 이상 | includeContext=true 재검색 |
 | active_errors | 미해결 error 파편 존재 | 각 파편 확인 후 forget |
@@ -1593,7 +1609,7 @@ reason code 6종 (`code` 필드값):
 
 ## 안티패턴
 
-다음 행동은 Memento를 무력화한다. 반드시 피할 것.
+다음 행동은 AnchorMind를 무력화한다. 반드시 피할 것.
 
 | 안티패턴 | 왜 나쁜가 | 올바른 행동 |
 |---------|----------|------------|
