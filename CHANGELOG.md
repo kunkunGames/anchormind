@@ -1,5 +1,28 @@
 # Changelog
 
+## [5.3.1] - 2026-07-27
+
+### Fixed
+- keywords-only recall에서 시맨틱 보조(L3kw) 결과가 정확 키워드 일치 파편을 랭킹에서 밀어내거나 tokenBudget 절단으로 소실시킬 수 있던 문제 수정 (#30). 정확 일치 파편에 절단 이전 랭킹 가산(`ranking.exactKeywordBoost`, 기본 0.35)을 적용하고, 절단을 슬롯 보장 방식(정확 일치 예산 50% 선점, 시맨틱 보조 25% 몫 보장, 잔여 경쟁)으로 확장했다. text/mixed 쿼리의 절단 동작은 변경 없다.
+- explanations의 `semantic_similarity` 사유가 `L3kw` 세그먼트 회수 파편에도 부여된다.
+
+### Changed
+- L3kw 보조 질의를 정규화(소문자·중복 제거·정렬, contextText 제외)해 임베딩 캐시 적중률을 높이고, 이 경로의 형태소 보조 검색을 생략한다. 실측 기준 L3kw 발동 지연 p50이 약 2.5초에서 0.5~1.1초로 감소.
+- L3kw 실행 상한 도입: `MEMENTO_KEYWORD_FALLBACK_TIMEOUT_MS`(기본 1500ms, 100~60000 클램프). 초과 시 보조 없이 즉시 반환하며 searchPath에 `L3kw:timeout`을 남긴다.
+
+## [5.3.0] - 2026-07-26
+
+### Added
+- text 없는 keywords-only recall에 L3 시맨틱 보조 경로. keywords(+contextText) 합성 텍스트 임베딩이 L2와 병렬 수행되어 저장 keywords 배열에 없는 용어도 content 기반으로 회수된다. searchPath에 `L3kw:N` 세그먼트가 남으며 `semanticSearch.keywordFallback`(env `MEMENTO_KEYWORD_SEMANTIC_FALLBACK=false`)로 비활성화할 수 있다.
+- `reflect`에 `workspace` 파라미터 노출. 생성되는 모든 reflect 파편에 적용되며, 미지정 시 API 키의 default_workspace → 전역(NULL) 순으로 폴백한다.
+### Fixed
+- 서버 재기동 후 Redis에서 복원된 세션이 이전 협상값(negotiatedVersion)을 그대로 되살려 이후 모든 요청이 400으로 거부되던 문제 수정. 협상값과 헤더가 달라도 지원 목록에 있는 값이면 헤더 값으로 재앵커링해 통과시키며(`mcp_protocol_version_reanchored_total` 카운터로 관측), 미지원 버전에 대한 400 거부는 유지된다. initialize 시 협상값을 Redis에 즉시 영속한다. (#26)
+
+### Changed
+- `batch_remember`의 fragments가 JSON 인코딩 문자열로 전달된 경우 원인을 명시하는 별도 오류 메시지를 반환한다.
+- JSON body 파싱 실패(-32700) 응답 message에 파서 위치 정보를 보존한다. 대량 배열 요청에서 손상 지점을 특정할 수 있다.
+- search_events의 `l3_count`가 keywords 폴백 보조 세그먼트(`L3kw:N`)도 집계한다.
+
 ## [5.2.3] - 2026-07-16
 
 ### Changed
