@@ -100,6 +100,8 @@ describe("R12 reflect 큰 페이로드 TDZ 회귀 가드", () => {
         return { results, inserted: frags.length, skipped: 0 };
       }
     };
+    /** narrative_summary는 별도 episode 저장 경로를 타므로 역시 외부 I/O를 차단한다. */
+    mm.reflectProcessor.remember = async () => ({ id: "stub-episode" });
 
     const summary = Array.from({ length: 10 }, (_, i) => `원자 사실 ${i + 1}. 이 문장은 reflect 큰 페이로드 재현 시나리오의 구성원이다.`);
     const narrativeSummary = "이 세션은 reflect 큰 페이로드 재현을 위한 통합 테스트 흐름이다. ".repeat(12).slice(0, 600);

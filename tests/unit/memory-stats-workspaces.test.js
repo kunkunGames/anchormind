@@ -18,7 +18,7 @@ const queryResponses = [];
 let   queryCallLog    = [];
 
 mock.module("../../lib/tools/db.js", {
-  exports: {
+  namedExports: {
     getPrimaryPool: () => ({
       query: async (sql) => {
         queryCallLog.push(sql);
@@ -34,14 +34,14 @@ mock.module("../../lib/tools/db.js", {
 });
 
 mock.module("../../lib/redis.js", {
-  exports: {
+  namedExports: {
     pushToQueue : async () => undefined,
     redisClient : null
   }
 });
 
 mock.module("../../lib/logger.js", {
-  exports: {
+  namedExports: {
     logInfo : () => {},
     logWarn : () => {},
     logError: () => {},

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 let capturedSql = "";
 mock.module("../../lib/tools/db.js", {
-  exports: {
+  namedExports: {
     getPrimaryPool      : () => ({ query: async () => ({ rows: [] }) }),
     queryWithAgentVector: async (_agent, sql) => { capturedSql = sql; return { rows: [] }; }
   }

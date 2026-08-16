@@ -17,13 +17,13 @@ import { mock }          from "node:test";
 const activityBySession = new Map();
 
 mock.module("../../lib/tools/db.js", {
-  exports: {
+  namedExports: {
     getPrimaryPool: () => ({ query: async () => ({ rows: [] }) })
   }
 });
 
 mock.module("../../lib/memory/processors/SessionActivityTracker.js", {
-  exports: {
+  namedExports: {
     SessionActivityTracker: {
       getActivity: async (sessionId) => activityBySession.get(sessionId) ?? null
     }

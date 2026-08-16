@@ -17,7 +17,7 @@ mock.module("../../lib/gemini.js", {
 });
 
 mock.module("../../lib/tools/db.js", {
-  exports: {
+  namedExports: {
     getPrimaryPool      : () => null,
     queryWithAgentVector: async () => ({ rows: [], rowCount: 0 })
   }
@@ -42,7 +42,7 @@ mock.module("../../lib/tools/embedding.js", {
 });
 
 mock.module("../../lib/logger.js", {
-  exports: {
+  namedExports: {
     logInfo        : () => {},
     logWarn        : () => {},
     logError       : () => {},
@@ -65,7 +65,7 @@ mock.module("../../lib/memory/consolidate/proper-nouns.js", {
 });
 
 mock.module("../../config/memory.js", {
-  exports: {
+  namedExports: {
     MEMORY_CONFIG: {
       fragmentSplit: {
         lengthThreshold    : 300,
