@@ -17,7 +17,7 @@ MemoryManager는 thin facade다. 비즈니스 로직은 `lib/memory/processors/`
 
 | 모듈 | 위임 대상 | 역할 |
 |------|----------|------|
-| `ContextBuilder` | `context()` | Core/Working/Anchor Memory 조합, rankedInjection, 컨텍스트 힌트 생성 |
+| `ContextBuilder` | `context()` | Anchor/Core/Learning/Working 후보 ID dedup, 최소 슬롯 보장 토큰 선택, 공통 flat/structured/rankedInjection 조립, 컨텍스트 힌트 생성 |
 | `ReflectProcessor` | `reflect()` | summary/decisions/errors_resolved/new_procedures/open_questions 파편 변환·저장, episode 생성, Working Memory 정리 |
 | `BatchRememberProcessor` | `batchRemember()` | Phase A(유효성 검증) → Phase B(트랜잭션 INSERT) → Phase C(후처리) 3단계 일괄 저장. Redis 가용 시 Phase B를 `_enqueueAsync()`로 위임하여 비동기 큐(BatchRememberWorker)에서 처리. DB 풀은 `getBatchPool()`(배치 전용 풀) 사용 |
 | `QuotaChecker` | `remember()` 진입 시 | API 키별 파편 할당량(fragment_limit) 검사 |
@@ -28,7 +28,7 @@ MemoryManager는 thin facade다. 비즈니스 로직은 `lib/memory/processors/`
 | 모듈 | 역할 |
 |------|------|
 | `FragmentSearch` (`lib/memory/read/FragmentSearch.js`) | L1~L4 검색 파이프라인 조율 |
-| `SearchScope` (`lib/memory/read/SearchScope.js`) | workspace·caseId·resolutionStatus·phase·affect·type·topic 7개 필드를 모든 검색 레이어에 일관 전달하는 정합 필터 계약 객체 |
+| `SearchScope` (`lib/memory/read/SearchScope.js`) | workspace·caseId·resolutionStatus·phase·affect·type·topic·isAnchor 필드를 모든 검색 레이어에 일관 전달하는 정합 필터 계약 객체 |
 | `SearchSideEffects` (`lib/memory/read/SearchSideEffects.js`) | 검색 결과 확정 후 부작용(검색 이벤트 영속화, SearchParamAdaptor 학습 신호)을 단일 모듈로 격리 |
 
 검색 관련 모듈은 `lib/memory/read/`에 위치하며, 임포트 경로는 실제 파일 위치를 그대로 따른다.
@@ -81,8 +81,8 @@ recall(query)
   ├── L3 PostgreSQL 전문 검색 (형태소; MorphemeTokenizer 로컬 CPU 분석기 → morpheme_dict → tsquery)
   ├── L4 Cross-Encoder Reranker (RRF 상위 30건)
   ├── RRF 병합 (k=60)
-  ├── SearchScope.applyTo() 필터 — workspace·caseId·resolutionStatus·phase·affect·type·topic 정합
-  │     _executeSearch() 내 각 레이어가 SearchScope 인스턴스를 공유하여 후처리 보정 불필요
+  ├── SearchScope.applyTo() 필터 — workspace·caseId·resolutionStatus·phase·affect·type·topic·isAnchor 정합
+  │     각 레이어의 사전 필터 뒤 search()가 같은 SearchScope 계약으로 최종 검증
   ├── 토큰 예산 절단 (tokenBudget)
   ├── valid_to 필터
   ├── explanations (ExplanationBuilder.annotate)
@@ -93,13 +93,15 @@ recall(query)
   │     L1/L2/RRF 캐시 단계는 전체 필드 유지, 최종 반환 직전에만 pick
   └── commitSearchSideEffects() → _meta.searchEventId 반환
         SearchSideEffects 모듈에 위임. 검색 이벤트 영속화 + SearchParamAdaptor 학습 신호.
-        _executeSearch() 후처리에서 SearchScope 필터가 이미 적용되었으므로
-        이 단계에서 별도 보정 없이 searchEventId만 반환한다.
+        search()는 랭킹·토큰 절삭 전에 SearchScope 최종 공통 필터를 적용하며,
+        이 단계에서는 검색 이벤트를 기록하고 searchEventId만 반환한다.
 ```
 
 `pickFields`는 19개 화이트리스트(`id, content, type, importance, topic, ..., key_id, key_name`) 외 필드를 제거한다. 캐시 단계(L1 warm hit, RRF 병합 중간 객체)에는 적용하지 않아 캐시 효율을 보존한다.
 
-**SearchScope 계약:** `SearchScope.fromQuery(sq)` 정적 팩토리가 `_buildSearchQuery()` 반환 sq에서 scope 인스턴스를 생성한다. `scope.applyTo(fragment)` 메서드는 workspace, caseId, resolutionStatus, phase, affect, type, topic 7개 필드를 동시 검사하여 false를 반환하는 경우 해당 파편을 결과에서 제외한다. HotCache·L3·Graph 호출 사이트가 모두 동일 인스턴스를 참조하므로 레이어별 파편 결과의 정합성이 보장된다. `_executeSearch()`는 별도의 후처리 보정을 수행하지 않는다.
+**결정적 랭킹 계약:** 검색·RRF·reranker·graph·context 주입은 각 경로의 기존 primary score를 내림차순으로 유지하고, 점수가 같을 때만 `created_at DESC, id ASC`를 적용한다. `created_at`은 쓰기 경로의 기본값으로 채워지며, PostgreSQL의 기존 내림차순 인덱스와 일치하도록 명시적 `NULLS LAST`를 사용하지 않는다. 예외적인 NULL 값도 PostgreSQL 기본값과 같은 `NULLS FIRST`로 비교해 SQL과 JS 순서를 맞춘다. rank가 없는 Redis Set 후보는 RRF에 동일 점수로 기여하고, hydration 후보도 같은 comparator로 정규화하므로 cold DB와 warm cache의 ID 순서가 같다. Working Memory는 기존 저장 shape 계약에 따라 `added_at DESC NULLS LAST, id ASC`를 유지한다. `recall`은 롤링 배포와 동적 reranker 후보 집합의 기존 의미를 보존하기 위해 offset cursor를 유지하며, cursor의 고정 `anchorTime`을 reranker recency boost에도 재사용한다. ANN 벡터 검색은 인덱스 사용을 위해 SQL에서 거리 표현식 하나로 후보를 제한하고, 선택된 후보 집합 내부의 거리 동점만 JS에서 결정적으로 정렬한다.
+
+**SearchScope 계약:** `SearchScope.fromQuery(sq)` 정적 팩토리가 `_buildSearchQuery()` 반환 sq에서 scope 인스턴스를 생성한다. `scope.applyTo(fragment)` 메서드는 workspace, caseId, resolutionStatus, phase, affect, type, topic, isAnchor를 동시 검사하여 false를 반환하는 경우 해당 파편을 결과에서 제외한다. HotCache·L3·Graph 호출 사이트의 사전 필터와 `search()`의 최종 공통 필터가 동일 인스턴스 계약을 사용하므로 hydration·보조 검색을 포함한 레이어별 결과의 정합성이 보장된다.
 
 ---
 
@@ -135,7 +137,7 @@ memory_consolidate 도구가 실행되거나 서버 내부 스케줄러(6시간 
 10. `retro_link` — GraphLinker.retroLink()로 고립 파편(임베딩 있음, 링크 없음) 최대 20건 소급 자동 링크
 11. `utility_score_update` — `importance * (1 + ln(max(access_count,1))) / age_months^0.3` 공식 갱신
 12. `requeue_high_ema` — ema_activation>0.3 AND importance<0.4 파편을 MemoryEvaluator 재평가 큐에 등록
-13. `promote_anchors` — access_count >= 10 + importance >= 0.8 파편을 `is_anchor=true`로 승격
+13. `promote_anchors` — access_count >= 10 + importance >= 0.8 파편을 `is_anchor=true`로 승격. `MEMENTO_AUTO_PROMOTE_ANCHORS=false`이면 이 stage만 `disabled_by_config` 사유로 건너뛴다(기본 true).
 14. `detect_contradictions` — 3단계 하이브리드 모순 탐지. pgvector cosine > 0.85 후보 추출 → mDeBERTa NLI → Gemini CLI 에스컬레이션. 결과는 `nliResolvedDirectly`, `nliSkippedAsNonContra`로 분리 반환
 15. `detect_supersessions` — 임베딩 유사도 0.7~0.85 구간 파편 쌍에 대해 Gemini CLI로 대체 관계 판단. GraphLinker의 0.85 이상 구간과 상보적으로 동작
 16. `process_pending_contradictions` — Gemini CLI 가용 시 Redis pending 큐에서 최대 10건 꺼내 재판정
@@ -239,11 +241,13 @@ SSE 스트림이 닫히면(`res.on('close')`) 서버는 SSE 응답 객체만 제
 
 ### OAuth 보안 모델 — keyId가 없는 OAuth는 master 권한이 아님
 
+인증은 `keyId=null`에서 권한을 추론하지 않고 명시적 `isMaster`를 보존한다. 직접 access-key와 명시적 auth-disabled 세션은 master이고, API-key-bound OAuth는 해당 key/group/workspace/permissions를 유지한다. generic non-API-key OAuth는 `isMaster=false`로 남는다.
+
 `validateAuthentication`의 OAuth 분기는 세 가지 우선순위 경로로 처리된다.
 
 1. **bound_key_id 경로 (1순위)**: 토큰의 `bound_key_id` 필드가 있으면 `validateApiKeyById(bound_key_id)`로 UUID 직접 조회. name-based client_id 바인딩 방식이 이 경로를 사용한다. 성공 시 `keyId`/`groupKeyIds`/`permissions` 반환. `mcp_oauth_bound_client_authenticated_total` 카운터 증가.
 2. **is_api_key=true 경로 (2순위)**: `client_id`가 원본 API 키 문자열인 경우 `validateApiKeyFromDB(client_id)`로 조회. bound_key_id 조회 실패 시에도 이 경로로 낙하.
-3. **non-API-key OAuth (3순위)**: `MCP_REJECT_NONAPIKEY_OAUTH=true`(기본)이면 `{ valid: false, error: "non-API-key OAuth denied" }` 반환. `mcp_oauth_nonapikey_rejected_total` + `memento_tenant_isolation_blocked_total{component="oauth_nonapikey_denied"}` 카운터 증가. `false`이면 하위 호환 동작 (`keyId=null` 세션 — 운영 환경에서 절대 사용하지 말 것).
+3. **non-API-key OAuth (3순위)**: `MCP_REJECT_NONAPIKEY_OAUTH=true`(기본)이면 `{ valid: false, error: "non-API-key OAuth denied" }` 반환. `mcp_oauth_nonapikey_rejected_total` + `memento_tenant_isolation_blocked_total{component="oauth_nonapikey_denied"}` 카운터 증가. `false`여도 세션은 `isMaster=false`이며, key/permission identity가 없으므로 memory tool과 resource read는 fail-closed로 거부된다. 현재 API key/OAuth 스키마는 non-default agent identity 바인딩을 지원하지 않는다.
 
 ### OAuth name-based client_id 바인딩
 
@@ -707,7 +711,7 @@ initialize 이후 모든 요청에서 `MCP-Protocol-Version` 헤더를 검사한
 
 ### tools/list 필터링
 
-`filterTools(tools, presetName, isMaster)` 함수가 `excluded_tools` Set에 포함된 도구를 제거한 목록을 반환한다. `requiresMaster=true` 프리셋은 마스터 키 세션(`keyId === null`)에만 적용되며, 일반 API 키 세션에서는 프리셋을 무시하고 전체 도구를 노출한다.
+`filterTools(tools, presetName, isMaster)` 함수가 `excluded_tools` Set에 포함된 도구를 제거한 목록을 반환한다. `requiresMaster=true` 프리셋은 명시적으로 인증된 마스터 세션(`isMaster === true`)에만 적용된다. 일반 API 키는 master 전용 프리셋을 무시하되 permission/master 전용 도구 필터는 계속 적용한다.
 
 `get_skill_guide` 도구 응답 조립 시 `getSkillGuideOverride(presetName, isMaster)`가 `skill_guide_override` 문자열을 반환하면 기본 가이드 대신 해당 문자열이 사용된다.
 
@@ -859,6 +863,14 @@ export async function dispatchChain(chain, prompt, options = {}, deps = {})
 체인은 provider 설정 배열이며, 첫 번째 provider부터 순서대로 시도하여 성공 시 결과를 반환한다. 실패(429, semaphore timeout, 오류) 시 다음 fallback provider로 이동한다.
 
 **동시성 제어:** `getSemaphore(chainKey, limit, waitMs)`로 provider별 독립 semaphore를 획득한다. chainKey는 `provider|baseUrl|model|apiKeyHash` 조합. `LLM_CONCURRENCY_WAIT_MS`(기본 30000ms) 초과 시 해당 provider 실패 처리. chain deadline은 `deps.startedAt`과 `LLM_CHAIN_TIMEOUT_MS`로 계산하며, 잔여 시간이 0 이하이면 즉시 chain 종료.
+
+## Agent scope와 snapshot 이관
+
+`resolveAgentScope`는 범위 해석 자체에서 peer 요청의 명시적 `_isMaster=true`를 검사하므로 CLI/임베디드 호출에도 master 계약을 적용한다. `agentId` 생략은 `default`이고, 특정 agent 요청은 해당 agent와 `default`를 선택한다. 전환 릴리즈의 legacy unbound 호환은 기본 true이며, 완화 경로 사용마다 경고와 `mcp_legacy_unbound_agent_scope_total`을 기록한다. 이관 후 false로 전환하면 일반 API key의 non-default agent 요청을 거부한다.
+
+migration-047은 `fragment_versions`/`case_events` snapshot 컬럼만 추가한다. `migrate`의 잔량 경고를 확인하고 구 writer 종료 후 CLI backfill을 실행한다. NULL은 peer를 포함한 읽기에서 격리된다. backfill은 갱신 0건 이후 재집계하며, backfillable 또는 sourceMissing/sourceDeleted 잔량은 `SNAPSHOT_BACKFILL_INCOMPLETE`로 보고한다. 공유 정규화는 파편과 version agent snapshot을 같은 트랜잭션에서 이동한다. 롤백은 snapshot 컬럼을 삭제할 뿐 정규화를 복원하지 않는다.
+
+구 세션은 재연결·initialize가 필요하다. bearer 없이 재사용한 구 세션에 isMaster가 없으면 도구 호출을 거부한다. `memory://stats`/`memory://topics`는 현재 default-agent 파편만 집계하며 master peer 입력 통로가 없다. `search_traces`/`reconstruct_history`도 기본 default-agent 범위를 적용한다.
 
 ## 프로세스 에러 가드
 

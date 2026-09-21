@@ -47,6 +47,8 @@ describe("buildRecallHint 우선순위", () => {
   it("빈 결과는 flag와 무관하게 no_results", () => {
     const hint = buildRecallHint([], {}, { contradictionPending: true });
     assert.equal(hint.signal, "no_results");
+    assert.equal(hint.trigger, "recall");
+    assert.match(hint.suggestion, /전역\(workspace 없음\).*workspace를 지정/);
   });
 
   it("빈 결과 + topic 후보는 no_results보다 topic_mismatch가 우선한다", () => {
@@ -61,11 +63,24 @@ describe("buildRecallHint 우선순위", () => {
     assert.match(hint.suggestion, /topic 'anchormind-mcp'/);
     assert.match(hint.suggestion, /anchormind-mcp-v3\(12건\), anchormind-recall\(4건\)/);
     assert.match(hint.suggestion, /topic=anchormind-mcp-v3으로 재검색/);
+    assert.match(hint.suggestion, /전역\(workspace 없음\).*workspace를 지정/);
   });
 
   it("topic 후보가 비어 있으면 기존 no_results를 유지한다", () => {
     const hint = buildRecallHint([], { topic: "anchormind-mcp" }, {}, []);
     assert.equal(hint.signal, "no_results");
+  });
+
+  it("명시 workspace, key default, master 전체 조회의 빈 결과는 기존 저장 안내", () => {
+    for (const args of [
+      { workspace: "ws-a" },
+      { _defaultWorkspace: "ws-default" },
+      { allWorkspaces: true, _isMaster: true }
+    ]) {
+      const hint = buildRecallHint([], args);
+      assert.equal(hint.signal, "no_results");
+      assert.equal(hint.trigger, "remember");
+    }
   });
 
   it("결과가 있으면 topic 후보가 있어도 topic_mismatch를 내지 않는다", () => {
@@ -108,7 +123,7 @@ describe("hasPendingContradictions", () => {
     assert.equal(queryCalls.length, 1);
     assert.match(queryCalls[0].sql, /relation_type = 'contradicts'/);
     assert.match(queryCalls[0].sql, /valid_to IS NULL/);
-    assert.deepEqual(queryCalls[0].params, [["f1", "f2"]]);
+    assert.deepEqual(queryCalls[0].params, [["f1", "f2"], "default"]);
   });
 
   it("pool 부재 시 false로 강등 (힌트는 advisory)", async () => {

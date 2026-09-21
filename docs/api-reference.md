@@ -93,10 +93,10 @@ X-RateLimit-Resource: fragments
 
 모든 MCP 도구 호출은 RBAC 검증을 통과해야 한다.
 
-- master key (`MEMENTO_ACCESS_KEY`): `permissions=null`로 처리되며 모든 도구를 호출할 수 있다.
+- master key (`MEMENTO_ACCESS_KEY`): 신뢰된 인증 결과의 명시적 `isMaster=true`로 판정하며 모든 도구를 호출할 수 있다. `permissions=null`이나 `keyId=null`만으로 master 권한을 추론하지 않는다.
 - API key (`mmcp_xxx`): 키 생성 시 지정된 `permissions` 배열 기준으로 도구 접근이 제한된다. 배열에 필요한 권한이 없으면 즉시 거부된다.
 - `TOOL_PERMISSIONS` 맵에 등록된 도구는 해당 권한 레벨이 요구된다. 맵에 등록되지 않은 도구명은 `required=null`로 간주되어 권한 검사를 통과한다. 도구를 RBAC 경계에 편입하려면 `TOOL_PERMISSIONS` 맵에 명시적으로 등록해야 한다.
-- 권한 레벨은 세 가지다: `read`(recall/context/memory_stats 등), `write`(remember/forget/amend 등), `admin`(memory_consolidate/apply_update 등). `admin` 권한을 가진 키는 모든 레벨을 호출할 수 있다.
+- 권한 레벨은 세 가지다: `read`(recall/context 등), `write`(remember/forget/amend 등), `admin`(memory_consolidate/apply_update 등). `admin` 권한만으로 master 전용 도구를 우회할 수는 없다.
 - 권한이 없는 도구를 호출하면 JSON-RPC 오류 `-32600`이 반환되며 `message`는 `Internal error`다. 거부 사유(`Permission denied: '<도구>' requires '<레벨>' permission`)는 서버 로그에만 남는다. 따라서 클라이언트는 응답만으로 권한 부족과 서버 오류를 구분할 수 없으므로, 재시도 정책을 세울 때 이 점을 감안해야 한다. `memory_consolidate`와 `apply_update`, `check_update`가 이 경로에 해당한다.
 - 타 테넌트(다른 API 키)가 소유한 파편에 forget/amend/link 요청 시 `"Fragment not found"` 에러가 반환된다. SQL 레벨에서 `key_id` 조건으로 격리되므로 존재 여부조차 노출되지 않는다.
 
@@ -309,10 +309,16 @@ API 키의 일일 호출 제한을 변경한다. 마스터 키 인증 필요.
 
 | URI | 설명 | 데이터 소스 |
 |-----|------|------------|
-| `memory://stats` | 시스템 통계 | `fragments` 테이블의 유형별, 계층별 카운트 및 유용성 점수 평균 |
-| `memory://topics` | 주제 목록 | `fragments` 테이블의 모든 고유한 `topic` 레이블 목록 |
+| `memory://stats` | 범위 내 통계 | 리소스의 key/workspace 범위에서 현재 유효한 default agent 파편의 유형별·계층별 카운트 및 유용성 평균 |
+| `memory://topics` | 범위 내 주제 목록 | 같은 범위의 현재 유효한 default agent 파편에서 고유 topic 목록 |
 | `memory://config` | 시스템 설정 | `MEMORY_CONFIG`에 정의된 가중치 및 TTL 임계값 |
 | `memory://active-session` | 세션 활동 로그 | `SessionActivityTracker`(Redis)에 기록된 현재 세션의 도구 사용 이력 |
+
+두 리소스에는 `includePeerAgents` 입력 경로가 없으므로 master도 전체 agent 집계를 요청할 수 없다. superseded 파편(`valid_to IS NOT NULL`)은 제외한다.
+
+Agent 조회는 생략 시 `default`, 지정 시 해당 agent와 `default`를 포함한다. 전환 릴리즈는 `MEMENTO_ALLOW_LEGACY_UNBOUND_AGENT_SCOPE=true`가 기본이며 일반 API key의 기존 specific-agent 주장을 경고·계수와 함께 허용한다. false로 설정한 strict 모드에서는 master만 specific agent를 지정할 수 있고, `includePeerAgents`는 설정과 무관하게 항상 master 전용이다. `search_traces`와 `reconstruct_history`도 이 기본 agent 필터 때문에 종전 관리 호출보다 결과가 줄어들 수 있다.
+
+`fragment_history`와 `graph_explore`의 ID 조회에도 workspace 필터가 적용된다. 예를 들어 default_workspace 없는 일반 키로 proj에 저장한 파편의 이력은 `{ "id": "fragment-id", "workspace": "proj" }`로 조회한다. master는 `{ "id": "fragment-id", "allWorkspaces": true }`로 workspace 필터를 제거한다. `graph_explore`는 두 예시의 `id`를 `startId`로 바꿔 호출한다. workspace 생략 시 global-only가 되어 종전 ID-only 조회가 not found로 바뀔 수 있다.
 
 ---
 
@@ -331,7 +337,7 @@ API 키의 일일 호출 제한을 변경한다. 마스터 키 인증 필요.
 | linkRelationType | string | - | 연결 파편 관계 유형 필터 (related, caused_by, resolved_by, part_of, contradicts) |
 | threshold | number | - | similarity 임계값 (0~1) |
 | includeSuperseded | boolean | - | 만료(superseded) 파편 포함. 기본 false. |
-| includePeerAgents | boolean | - | true 시 같은 키/workspace 스코프 내 다른 agentId 파편 포함(멀티에이전트 협업용). 키·workspace 경계는 유지. 기본 false. |
+| includePeerAgents | boolean | - | master 전용. true 시 같은 키/workspace 스코프 내 다른 agentId 파편 포함. 일반 API 키는 권한 오류. 기본 false. |
 | includeKeyName | boolean | - | true 시 각 파편에 key_id와 key_name(액세스 키 라벨)을 포함한다. 같은 키 그룹 스코프의 정보만 노출된다. 기본 false. |
 | asOf | string | - | ISO 8601. 특정 시점 기준 유효 파편만. |
 | excludeSeen | boolean | - | context()에서 이미 주입된 파편 제외. 기본 true. |
@@ -344,13 +350,14 @@ API 키의 일일 호출 제한을 변경한다. 마스터 키 인증 필요.
 | caseMode | boolean | - | CBR 모드. 유사 파편을 case_id별로 그루핑하여 (goal, events, outcome) 트리플로 반환. 과거 유사 작업 해결 사례 참조 시 사용. |
 | maxCases | number | - | caseMode에서 반환할 최대 케이스 수. 기본 5, 상한 10. |
 | depth | string | - | 검색 깊이 필터. "high-level" / "detail" / "tool-level". 상세 설명은 아래 참조. |
-| workspace | string | - | 검색 범위 제한. 지정 시 해당 workspace + 전역(NULL) 파편만 반환. |
+| workspace | string | - | 검색 범위 제한. 지정 시 해당 workspace + 전역(NULL), 미지정 시 key default + 전역(NULL), 둘 다 없으면 전역(NULL)만 반환. |
+| allWorkspaces | boolean | - | master 전용 전체 workspace 조회. 일반 API key가 true를 요청하면 권한 오류. |
 | contextText | string | - | 현재 대화 맥락 텍스트. 관련 파편을 선제적으로 활성화 (ENABLE_SPREADING_ACTIVATION=true 시). |
-| cursor | string | - | 페이지네이션 커서 |
+| cursor | string | - | 정렬 위치와 고정 `anchorTime`을 담은 기존 호환 불투명 페이지네이션 커서 |
 | pageSize | number | - | 기본 20, 최대 50 |
 | agentId | string | - | 에이전트 ID |
 | minImportance | number | - | 최소 중요도 필터 (0~1). 이 값 이상의 importance를 가진 파편만 반환. |
-| isAnchor | boolean | - | true 시 앵커(고정) 파편만 반환. 핵심 지식 조회에 유용. |
+| isAnchor | boolean | - | 앵커 필터. `true`는 앵커만, `false`는 비앵커만 반환하며 미지정 시 둘 다 반환. |
 | affect | string \| string[] | - | 정서 태그 필터. 단일 문자열 또는 배열. 해당 affect 값을 가진 파편만 반환. 유효값: neutral, frustration, confidence, surprise, doubt, satisfaction |
 | fields | string[] | - | 응답에 포함할 파편 필드 목록. 미지정 시 전체 필드 반환. 지원 키: id / content / type / topic / keywords / importance / created_at / access_count / confidence / linked / explanations / workspace / context_summary / case_id / valid_to / affect / ema_activation |
 
@@ -379,7 +386,9 @@ API 키의 일일 호출 제한을 변경한다. 마스터 키 인증 필요.
 `_meta`: recall/context 응답 최상위의 메타데이터 래퍼.
 
 - `searchEventId`: 검색 이벤트 식별자. 후속 `tool_feedback` 호출 시 FK로 사용.
-- `hints`: 검색 결과 신호 배열(`no_results`, `topic_mismatch`, `contradiction_pending`, `stale_results`, `active_errors` 등). `topic_mismatch`는 지정한 topic으로 0건이면서 키 스코프 내에 유사 topic이 존재할 때 발화하며 제안된 topic으로의 재검색을 권고한다. `contradiction_pending`은 반환 파편에 미해결 contradicts 링크가 있을 때 발화하며 amend 정리를 권고한다.
+- `hints`: 검색 결과 신호 배열(`no_results`, `topic_mismatch`, `contradiction_pending`, `stale_results`, `active_errors` 등). `topic_mismatch`는 지정한 topic으로 0건이면서 키 스코프 내에 유사 topic이 존재할 때 발화하며 제안된 topic으로의 재검색을 권고한다. `contradiction_pending`은 반환 파편에 미해결 contradicts 링크가 있을 때 발화하며 amend 정리를 권고한다. workspace와 key default를 모두 생략한 global-only 조회가 0건이면 `no_results`의 제안은 해당 workspace를 지정해 재검색하도록 안내한다.
+
+`default_workspace`가 없는 공유 키에서 저장 시 workspace를 명시했다면 recall/context에도 같은 workspace를 전달해야 한다. 생략한 조회는 전역(NULL) 파편만 대상으로 하므로 저장된 workspace 파편이 사라진 것처럼 보일 수 있다. 업그레이드 전 Redis Working Memory 항목은 workspace 필드가 없어 scoped/global-only context에서 제외되며, master의 `allWorkspaces=true`에서만 포함된다.
 - `suggestion`: 사용 패턴 기반 도구 제안.
 - `serverTime`: 응답 생성 시점의 서버 시각. LLM 클라이언트의 학습 시점 시간 고착을 방지하기 위해 모든 recall/context 응답에 일관되게 포함된다. `iso`(UTC ISO 8601), `epoch_ms`(Unix ms), `display_kst`(Asia/Seoul 한국어 표기), `timezone` 4필드 구성.
 
@@ -491,6 +500,8 @@ reason code 목록 (최대 3개):
   "caseCount": 1
 }
 ```
+
+`fragment_count`는 현재 키 그룹·workspace·유효 상태·`isAnchor` 필터를 모두 통과해 해당 케이스의 대표값 후보가 된 파편 수다. 케이스의 전체 누적 파편 수가 아니다. `events`는 source 파편의 현재 앵커 상태로 필터링하지 않으며, 현재 키 그룹에서 볼 수 있는 이력을 케이스당 최대 20건 반환한다.
 
 #### event_type enum
 
@@ -868,19 +879,24 @@ violations 있는 경우 (soft gate — 저장됨):
 
 ## MCP 도구 — context
 
-Core Memory + Working Memory + session_reflect를 분리 로드한다. 세션 시작 시 preference, error, procedure, decision 파편을 주입하여 맥락 유지.
+Anchor + Core + Learning + Working Memory와 session_reflect를 분리 로드한다. ID 중복 제거 후 flat/structured 응답과 injectionText에 같은 파편 집합을 사용한다. 앵커와 core 유형별·learning·working의 최소 1건은 맥락 소실 방지를 위해 우선 보장한다.
 
 ### 파라미터
 
 | 이름 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| tokenBudget | number | - | 최대 토큰 수 (기본 2000) |
+| tokenBudget | number | - | 주입 토큰 목표치(기본 2000). 앵커와 비앵커 최소 보장 슬롯 때문에 합계가 목표치를 넘을 수 있고, 나머지 후보는 점수순으로 절삭된다. |
 | types | string[] | - | 로드할 유형 목록 (기본: preference, error, procedure) |
 | sessionId | string | - | 세션 ID (Working Memory 로드용) |
 | agentId | string | - | 에이전트 ID |
-| workspace | string | - | 워크스페이스 필터. 지정 시 해당 workspace 파편 + 전역(NULL) 파편만 반환. 미지정 시 키의 default_workspace 적용. |
+| workspace | string | - | 워크스페이스 필터. 지정 시 해당 workspace + 전역(NULL), 미지정 시 key default + 전역(NULL), 둘 다 없으면 전역(NULL)만 반환. |
+| allWorkspaces | boolean | - | master 전용 전체 workspace context 조회. anchor/core/learning/working memory에 동일 적용. |
 | structured | boolean | - | true 시 계층적 트리 구조 반환, false/미지정 시 기존 flat list (기본값: false) |
 | includeKeyName | boolean | - | true 시 fragments 각 항목에 key_id와 key_name(액세스 키 라벨)을 포함한다. 같은 키 그룹 스코프의 정보만 노출되며, structured=true 트리 응답에는 적용되지 않는다. 기본 false. |
+
+### Anchor 선택 메타
+
+응답의 `_meta.anchorSelection`은 `totalLimit`, `workspaceReserve`, `reserveApplied`와 함께 `candidates`, `selected`, `excluded`의 workspace/global/unscoped/total 수를 제공한다. `selected.reservedWorkspace`는 예약 단계에서 먼저 포함된 workspace anchor 수다. `loadStatus`는 각 후보 범위의 조회 성공 여부(적용하지 않은 범위는 `null`)를 나타내고, 하나라도 실패하면 `partial=true`이며 알 수 없는 후보·제외 수는 `null`이다. effective workspace가 있으면 workspace 상위 예약분을 먼저 선택한 뒤, 남은 슬롯을 잔여 workspace와 전역 anchor의 통합 importance 순으로 채운다. effective workspace가 없으면 reserve 없이 현재 허용된 단일 후보 범위의 상위 anchor를 선택하고 그 수를 `unscoped`로 보고한다. 일반 호출에서는 전역(NULL) anchor만 해당하며, 서버가 인증한 master의 `allWorkspaces=true` 호출에서만 전체 workspace 후보를 포함한다.
 
 ---
 
@@ -907,7 +923,7 @@ Core Memory + Working Memory + session_reflect를 분리 로드한다. 세션 �
 
 ## MCP 도구 — memory_stats
 
-파편 기억 시스템 통계 조회. 전체 파편 수, TTL 분포, 유형별 통계를 반환한다.
+master key 전용 파편 기억 시스템 통계 조회. 전체 파편 수, TTL 분포, 유형별 통계를 반환한다. 테넌트별 scope가 없는 전역 집계이므로 일반 API key에는 노출하지 않는다.
 
 ### 파라미터
 
@@ -967,7 +983,7 @@ workspace 기입 현황과 세션당 파편 분포를 반환한다.
 
 ## MCP 도구 — session_rotate
 
-현재 세션을 종료하고 새 `sessionId`를 발급한다. 토큰 탈취 의심 시 또는 주기적 로테이션에 사용한다. 동일 `bound_key_id` / `workspace` / `permissions`가 새 세션으로 이관된다.
+현재 세션을 종료하고 새 `sessionId`를 발급한다. 토큰 탈취 의심 시 또는 주기적 로테이션에 사용한다. 회전 시 현재 credential을 다시 검증하여 `bound_key_id` / key group / `permissions`를 최신 값으로 갱신하고, 기존 세션에서 선택된 `defaultWorkspace`와 `mode`는 그대로 유지한다.
 
 ### 파라미터
 
@@ -987,6 +1003,9 @@ workspace 기입 현황과 세션당 파편 분포를 반환한다.
 |------|------|------|------|
 | startId | string | O | 시작 파편 ID (error 파편 권장) |
 | agentId | string | - | 에이전트 ID |
+| includePeerAgents | boolean | - | master 전용. 같은 key/workspace 범위의 다른 agent 노드 포함. 기본 false. |
+| workspace | string | - | 시작·이웃 파편의 범위. 생략 시 key 기본 workspace를 사용하며 둘 다 없으면 전역(NULL)만 조회. |
+| allWorkspaces | boolean | - | master 전용. true이면 시작·이웃 파편의 workspace 필터를 제거한다. agent/key 경계는 유지. 기본 false. |
 
 ---
 
@@ -1000,7 +1019,9 @@ workspace 기입 현황과 세션당 파편 분포를 반환한다.
 |------|------|------|------|
 | id | string | O | 조회할 파편 ID |
 | agentId | string | - | 에이전트 ID |
-| includePeerAgents | boolean | - | true 시 같은 API 키 스코프 내 다른 agentId의 파편 이력도 조회한다. 테넌트(키) 경계는 완화되지 않는다. 기본 false. |
+| includePeerAgents | boolean | - | master 전용. 같은 key/workspace 범위의 다른 agent 이력 포함. 일반 API 키는 권한 오류. 기본 false. |
+| workspace | string | - | 현재 파편·버전·superseded chain의 범위. 생략 시 key 기본 workspace를 사용하며 둘 다 없으면 전역(NULL)만 조회. |
+| allWorkspaces | boolean | - | master 전용. true이면 현재 파편·버전·superseded chain의 workspace 필터를 제거한다. agent/key 경계는 유지. 기본 false. |
 
 ---
 
@@ -1030,6 +1051,9 @@ case_id 또는 entity 기반으로 작업 히스토리를 시간순으로 재구
 | query | string | - | 추가 키워드 필터 |
 | limit | number | - | 기본 100, 최대 500 |
 | workspace | string | - | 워크스페이스 필터. 지정 시 해당 workspace + 전역(NULL) 파편만 대상. |
+| allWorkspaces | boolean | - | master 전용. true이면 timeline·event·evidence·인과 링크의 workspace 필터를 제거한다. |
+| agentId | string | - | 생략 시 default 공유 범위. strict 모드에서 특정 agent 지정은 master 전용이며, 전환 릴리즈의 legacy 호환 기본 true는 일반 키의 기존 주장을 임시 허용. |
+| includePeerAgents | boolean | - | master 전용. 같은 key/workspace 범위의 모든 agent 포함. 기본 false. |
 
 ### 반환값
 
@@ -1058,6 +1082,9 @@ fragments를 정확 매칭으로 탐색한다 (recall의 시맨틱 검색과 달
 | time_range | object | - | 시간 범위 필터. from(시작 시각, ISO 8601), to(종료 시각, ISO 8601) 포함. |
 | limit | number | - | 기본 20, 최대 100 |
 | workspace | string | - | 워크스페이스 필터. 지정 시 해당 workspace + 전역(NULL) 파편만 대상. |
+| allWorkspaces | boolean | - | master 전용. true이면 trace의 workspace 필터를 제거한다. |
+| agentId | string | - | 생략 시 default 공유 범위. strict 모드에서 특정 agent 지정은 master 전용이며, 전환 릴리즈의 legacy 호환 기본 true는 일반 키의 기존 주장을 임시 허용. |
+| includePeerAgents | boolean | - | master 전용. 같은 key/workspace 범위의 모든 agent 포함. 기본 false. |
 
 ---
 

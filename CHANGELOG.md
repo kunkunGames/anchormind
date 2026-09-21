@@ -2,6 +2,78 @@
 
 ## [Unreleased]
 
+## [5.10.0] - 2026-09-19
+
+### Added
+
+- `npm run migrate`가 번호 마이그레이션 적용 후 `fragment_synthetic_query.embedding`을 `fragments.embedding`의 타입·차원과 비교해 불일치하면 한 트랜잭션에서 파생 행 삭제, 컬럼 타입 변경, 부분 HNSW 인덱스 재생성을 수행한다(migration-049). 재생성은 `SyntheticQueryWorker.backfill()`이 비동기로 처리하며 그때까지 역질의 검색 결과가 줄고 provider 비용이 발생할 수 있다. 이미 정합한 설치에서는 변경이 없다.
+- 스케줄러와 PollingWorker의 Primary 풀 연결 획득을 FIFO 대기 큐 뒤에 두는 백그라운드 게이트. 동시 점유 상한은 `DB_BACKGROUND_MAX_CONNECTIONS`(기본 `DB_MAX_CONNECTIONS`의 40%), 대기 상한은 `DB_BACKGROUND_WAIT_MAX_MS`(기본 120000)이며 초과한 백그라운드 작업만 실패하고 다음 회차에 재시도한다. 상태는 `mcp_background_gate_active_slots`, `mcp_background_gate_waiting`, `mcp_background_gate_capacity` 게이지로 노출한다.
+
+### Changed
+
+- GraphLinker의 의미 기반 폐기는 코사인 유사도 0.95 이상에 더해 내용 완전 일치를 요구하고, `(created_at, id)` 순서로 더 오래된 행만 승자로 고른다. 키 범위는 호출 인자 대신 저장된 원본 행의 `key_id`에서 도출하며 원본·중복·후보 조회 모두 폐기된 행을 제외한다. 배치로 저장된 유사하지만 다른 파편 둘이 서로를 폐기하던 문제를 막는다.
+- 세션 세그먼트 회전 시의 자동 reflect, 관리자 세션 정리, 기동 시 워밍업이 백그라운드 게이트를 거친다. 외부 client로 들어온 파편 저장은 스키마 확인을 건너뛴다.
+- 런타임 의존성 `openai`를 7.12.1로, 개발 의존성 `eslint`를 10.10.0으로 올렸다.
+
+## [5.9.1] - 2026-09-11
+
+### Added
+
+- 자동 앵커 승격만 비활성화할 수 있는 `MEMENTO_AUTO_PROMOTE_ANCHORS` 설정을 추가했다. 기본값과 빈 값은 기존 동작을 유지하는 `true`이며, 비활성 상태는 정리 결과·로그·`mcp_anchor_auto_promotion_enabled` 메트릭에서 확인할 수 있다.
+- `anchor-scope` CLI: non-default anchor를 shared/private/unconfirmed로 inventory한다. `--include-non-anchors`는 legacy 일반 파편까지 포함한다. 기본 dry-run이며 migration-047 schema guard와 명시 승인 목록을 통과한 shared 항목만 version history를 남기고 `default`로 정규화한다.
+- `MEMENTO_REDIS_SESSION_FAIL_CLOSED=true`: Redis session 저장 실패 시 요청도 실패시키는 opt-in. 기본값은 false이며 Redis 순단 시 in-memory 세션으로 계속 동작한다. 단, rotation에서 기존 Redis 세션 삭제가 실패하면 fixation 방지를 위해 항상 실패한다.
+- 검색 이벤트에 effective agent scope와 peer flag를 기록하는 migration-047.
+- `case_events.event_type` CHECK 제약에 `case_closed`를 추가하는 migration-048.
+- 서버 기동 시 `schema_migrations`에 기록되지 않은 migration 파일을 error 로그로 나열한다. 기동은 막지 않으며, 미적용 상태에서 해당 컬럼을 쓰는 amend·case event·search event 기록이 실패하기 전에 `npm run migrate` 누락을 드러낸다.
+
+### Changed
+
+- `fragment_history`와 `graph_explore`의 ID 기반 조회에도 workspace 필터를 적용한다. 종전의 ID만 지정한 조회와 호환되지 않을 수 있다. `default_workspace` 없는 키가 `workspace="proj"`에 저장한 파편의 이력은 `{ "id": "fragment-id", "workspace": "proj" }`로 조회해야 한다(`graph_explore`는 `id` 대신 `startId`). master는 `allWorkspaces=true`로 workspace 필터만 제거할 수 있으며 agent·key-group 범위는 유지된다.
+- `memory://stats`와 `memory://topics`는 현재 유효한(`valid_to IS NULL`) `default` agent 파편을 해당 리소스의 key/workspace 범위에서 집계한다. 리소스에는 peer 범위를 지정하는 통로가 없어 master도 이 리소스로 전체 agent 집계를 얻을 수 없다.
+- `search_traces`와 `reconstruct_history`에도 agent 필터를 적용한다. `agentId` 생략은 `default` 범위이므로 기존 관리 호출의 결과가 줄어들 수 있다. master는 특정 `agentId` 또는 `includePeerAgents=true`를 명시할 수 있다.
+- `searchBySource`를 사용하는 session-context와 learning 파편은 자기 키뿐 아니라 같은 키 그룹의 파편도 조회한다. 다른 읽기 경로와 같은 그룹 공유 계약이며 agent/workspace 제한은 유지된다.
+- 검색·캐시·그래프·컨텍스트의 기존 주 점수 의미는 유지하면서 동점 결과를 `created_at DESC, id ASC`로 결정적으로 정렬한다. 기존 내림차순 인덱스와 offset cursor 계약은 유지하며, ANN 검색은 인덱스가 고른 후보 집합 안에서만 동점을 정렬한다.
+- context anchor 기본 상한을 10개에서 20개로 변경한다. effective workspace에 기본 10개를 예약하면서도 나머지 10개를 잔여 workspace/global 통합 순위에 남기기 위한 의도적인 주입량 변경이다. Anchor는 `tokenBudget` 절삭 대상이 아니므로 최악 주입량이 종전의 2배가 될 수 있으며, 기존 주입량이 필요한 배포는 `MEMENTO_CONTEXT_ANCHOR_LIMIT=10`으로 유지할 수 있다. Reserve를 따로 지정하지 않으면 total/2를 내림한 값(최대 10)으로 유도해 total만 낮춘 기존 배포의 기동 실패와 workspace 예약분의 자동 독점을 피한다.
+- `recall.isAnchor`의 true/false/미지정 계약을 캐시·그래프·링크·케이스 확장까지 일관되게 적용한다. 검색 진입점과 링크 조회의 null도 미지정으로 정규화한다. case event 타임라인은 source 파편의 현재 앵커 상태와 분리해 과거 이력을 보존한다. `caseMode.fragment_count`는 키 그룹·workspace·유효 상태·앵커 필터를 적용한 대표 후보 수로 정의한다.
+- API 키로 `caseMode`를 호출하면 대표 파편과 이벤트를 현재 키 그룹 범위로 제한한다. master가 기록해 `key_id IS NULL`인 이벤트는 API 키 응답에서 제외되며, master 호출은 종전처럼 전체 이벤트를 조회한다.
+- `context`는 fragment ID 중복을 제거하고 Anchor/Core/Learning/Working의 최소 슬롯을 보장한 뒤, flat·structured·주입 텍스트·순위 목록에 같은 선택 집합과 토큰 통계를 사용한다. 최소 보장 슬롯 때문에 `tokenBudget`은 soft target으로 동작할 수 있다.
+
+### Security
+
+- 기억 조회가 workspace와 key default를 모두 생략한 경우 이제 전역(`workspace IS NULL`) 파편만 조회한다. 전체 workspace 조회는 master가 `allWorkspaces=true`를 명시한 경우에만 허용하며, 일반 API key 요청은 권한 오류로 거부한다. recall/context의 anchor/core/learning/working memory와 L1~L3·graph·linked hydration뿐 아니라 reconstruct_history/search_traces에도 같은 계약을 적용한다.
+- `context`의 anchor/core/learning/Working Memory와 recall의 source/linked/graph/semantic hydration에 동일한 agent 범위를 적용한다. `agentId` 생략은 `default` 공유 기억만, 지정 시 해당 agent와 `default`만 반환한다.
+- `includePeerAgents=true`는 master key 전용으로 제한한다. 일반 API key 요청은 권한 오류로 거부하며 key-group/workspace 경계는 완화하지 않는다.
+- API key에는 아직 non-default agent identity 바인딩이 없다. 이번 전환 릴리즈는 `MEMENTO_ALLOW_LEGACY_UNBOUND_AGENT_SCOPE=true`를 기본으로 기존 클라이언트의 non-default `agentId` 주장을 허용하고, 실제 완화 경로 사용에 경고 로그와 `mcp_legacy_unbound_agent_scope_total` 계수기를 남긴다. `false`를 명시하면 일반 API key는 생략/`default`만 허용한다. `includePeerAgents`는 설정과 무관하게 master 전용이다.
+- transport session context가 없는 직접 `tools/call` dispatch와 body의 내부 권한 필드 위조를 fail-closed로 거부한다.
+- migration-047은 version/case-event scope 컬럼을 nullable로만 추가한다. 구버전 writer와의 롤링 호환을 위해 `NOT NULL` 제약과 대량 backfill을 migration 트랜잭션에 포함하지 않는다.
+- agent scope snapshot 진단은 `anchor-scope --backfill-snapshots`로 제공한다. source가 남은 legacy snapshot만 짧은 배치로 복구하며, source가 없거나 삭제된 행은 NULL 격리 상태로 남고 peer 조회에서도 제외된다. 완료 판정과 출력은 `sourceMissing`/`sourceDeleted` 잔량을 함께 드러내어 복구 가능한 행 처리와 격리 데이터 잔존을 구분한다.
+- 일반 API key에서 `memory_stats`를 포함한 master 전용 도구는 tools/list와 OpenAPI 모두에서 노출하지 않는다. 기존 read 권한 키의 도구 목록에서 `memory_stats`가 제거된다.
+- 기존 데이터는 `anchor-scope --include-non-anchors`로 inventory한 뒤 명시적으로 공유 분류된 항목만 `default`로 이관한다. 정규화는 파편과 해당 `fragment_versions.agent_id`를 같은 트랜잭션에서 옮겨 변경 이력의 가시성을 유지한다. 기본 활성인 legacy 호환 모드는 같은 key 내부 agent 인증을 보장하지 않으므로 사용 계수를 관찰하고 클라이언트 이관 후 명시적으로 `false`로 전환한다. 다음 부 버전의 기본 차단 전환은 사용 계수가 0인지 확인한 뒤 판단한다.
+- 인과 체인 링크는 양 끝 파편이 모두 요청의 agent/key/effective-workspace 범위 안에 있을 때만 반환한다. workspace 생략 시 전역(NULL), 지정 시 해당 workspace와 전역, master의 `allWorkspaces=true`일 때만 전체 workspace를 허용한다.
+- 런타임 의존성 감사 게이트를 `audit-ci`로 옮기고 예외를 `audit-ci.jsonc`의 allowlist에 사유와 함께 명시한다. moderate 이상 차단 기준은 그대로이며, 상류에 패치 판이 없어 올릴 데가 없는 권고만 예외로 둔다. 현재 예외는 `GHSA-vwc7-r8mq-g2x9`(adm-zip) 한 건으로, `@huggingface/transformers` -> `onnxruntime-node` 경로의 postinstall 아카이브 해제에서만 쓰이고 런타임 경로에는 없다.
+- `sharp` override를 `^0.35.4`로 올린다.
+
+### 업그레이드 주의
+
+- 업그레이드 전에 열린 세션은 재연결하여 `initialize`를 다시 수행해야 한다. `isMaster` 없는 구 세션이 bearer 인증정보 없이 재사용되면 재앵커링할 수 없어 도구 호출이 `-32001`로 실패한다.
+- migration-047은 `fragment_versions`와 `case_events`의 legacy snapshot을 자동으로 채우지 않는다. `migrate`의 잔량 경고를 확인하고 구 writer 종료 후 `anchor-scope --backfill-snapshots --execute --approve-backfill`을 수동 실행한다. 그 전에는 NULL snapshot 이력·이벤트가 읽기에서 제외되어 `fragment_history.versions`가 비어 보일 수 있다.
+- migration-048을 적용하지 않고 이 버전을 기동하면 `case_closed` 이벤트 기록은 종전처럼 경고만 남기고 무시된다. `npm run migrate` 후 재시작해야 케이스 종결 이벤트가 남는다.
+- snapshot 롤백은 컬럼과 backfill 결과를 삭제하며 `anchor-scope --execute` 정규화를 되돌리지 않는다. 재적용·재백필은 현재 파편의 `default`를 기록하므로 정규화 이전 agent 복원에는 별도 사전 백업이 필요하다.
+- `anchor-scope` 출력은 항상 JSON이다. `--json`은 기존 호출 호환용이며 출력 형식을 바꾸지 않는다.
+- `MCP_REJECT_NONAPIKEY_OAUTH=false`는 non-API-key OAuth 인증을 허용하지만 master 권한을 부여하지 않는다. 도구 호출에는 API 키 바인딩이 필요하며, 바인딩 없는 OAuth 세션은 `-32001`로 거부된다.
+- snapshot backfill은 실행당 최대 1,000배치로 제한한다. 상한 도달 시 처리 건수와 함께 실패 종료하며, 이미 커밋된 배치는 유지된다. 구 writer 종료를 확인한 뒤 같은 명령으로 남은 항목을 이어서 처리할 수 있다.
+- master 키로 workspace를 생략해 전체 기억을 조회하던 관리 호출은 `allWorkspaces=true`를 추가해야 한다. 명시 workspace와 API key `default_workspace`의 의미는 유지된다.
+- `default_workspace`가 없는 공유 키로 저장할 때 workspace를 명시해 왔다면, `recall`과 `context`에도 같은 workspace를 명시해야 한다. 생략하면 이제 전역(`workspace IS NULL`) 범위만 조회하며, 빈 결과 힌트는 workspace를 지정한 재검색을 안내한다.
+- 업그레이드 전에 Redis Working Memory에 들어간 항목은 workspace 필드가 없어 scoped/global-only context에서 안전하게 판정할 수 없으므로 제외된다. master의 `allWorkspaces=true`에서는 agent/key 메타데이터가 확인되는 항목만 조회할 수 있고, agent/key 메타데이터도 없으면 항상 제외된다. 그 밖에는 해당 WM 목록이 만료·퇴출·삭제될 때까지 남을 수 있다(명목 TTL 24시간, 쓰기 시 갱신).
+
+### Fixed
+
+- `amend`가 `resolutionStatus=resolved` 전환 시 남기는 `case_closed` 이벤트가 `CaseEventStore`의 허용 목록과 DB CHECK 제약 양쪽에서 거부되어 항상 기록되지 않던 문제를 고쳤다. 허용 목록은 `CASE_EVENT_TYPES`로 내보내며 migration-048과 함께 적용해야 한다.
+- case mode 이벤트 조회가 nullable `source_fragment_id`를 활성 파편과 내부 조인해 source 없는 이벤트와 supersede·GC된 source의 과거 이벤트를 누락하던 회귀를 막았다. API 키 요청은 동일 case ID 충돌에 따른 교차 테넌트 노출을 막기 위해 현재 키 그룹의 이벤트만 허용하며, `key_id IS NULL`인 레거시·master 이벤트는 master 조회에서만 반환된다.
+- 업그레이드 전 Redis 세션에 `isMaster` 필드가 없을 때 현재 요청의 인증과 세션 key가 일치하면 master 여부를 안전하게 재앵커링한다. 인증정보가 없거나 key가 다르면 일반 권한으로 유지한다.
+- global-only 빈 결과 안내를 CLI의 table·CSV·JSON 출력에 노출하고, `topic_mismatch`가 함께 감지되더라도 workspace 재검색 안내를 유지한다.
+- 한 배치에 같은 내용의 파편이 둘 이상 들어오면 `reflect`와 `batch_remember`가 통째로 실패하던 문제를 고쳤다. 다중행 삽입 전에 충돌 키가 같은 항목을 하나로 접고, 접힌 항목에도 대표와 같은 파편 식별자를 돌려준다. 접는 규칙은 항목을 하나씩 넣었을 때와 결과가 같도록 importance는 최대값, is_anchor는 논리합, 나머지 열은 첫 항목 값을 따른다.
+
 ## [5.9.0] - 2026-08-29
 
 회상 품질 회귀의 원인을 규명해 되돌리고, 인증과 격리의 기본값을 안전한 쪽으로

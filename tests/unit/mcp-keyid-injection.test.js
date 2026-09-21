@@ -22,7 +22,8 @@ describe("injectSessionContext — _keyId 주입 보장", () => {
     sessionKeyId:     42,
     sessionGroupKeyIds: [10, 20],
     sessionPermissions: ["read", "write"],
-    sessionDefaultWorkspace: "ws-main"
+    sessionDefaultWorkspace: "ws-main",
+    sessionIsMaster: false
   };
 
   it("arguments가 null인 경우 새 객체 생성 후 _keyId 주입", () => {
@@ -50,11 +51,13 @@ describe("injectSessionContext — _keyId 주입 보장", () => {
       sessionKeyId:     null,
       sessionGroupKeyIds: null,
       sessionPermissions: null,
-      sessionDefaultWorkspace: null
+      sessionDefaultWorkspace: null,
+      sessionIsMaster: true
     };
     const msg = { method: "tools/call", params: { name: "recall", arguments: {} } };
     const result = injectSessionContext(msg, masterCtx);
     assert.strictEqual(result.params.arguments._keyId, null);
+    assert.strictEqual(result.params.arguments._isMaster, true);
   });
 
 });
@@ -66,7 +69,8 @@ describe("injectSessionContext — 클라이언트 위조 차단", () => {
     sessionKeyId:     99,
     sessionGroupKeyIds: [1],
     sessionPermissions: ["read"],
-    sessionDefaultWorkspace: "ws-real"
+    sessionDefaultWorkspace: "ws-real",
+    sessionIsMaster: false
   };
 
   it("클라이언트가 전송한 _keyId='victim_key' 무시하고 서버 keyId로 덮어씀", () => {
@@ -128,6 +132,15 @@ describe("injectSessionContext — 클라이언트 위조 차단", () => {
     };
     const result = injectSessionContext(msg, SERVER_CTX);
     assert.strictEqual(result.params.arguments._defaultWorkspace, "ws-real");
+  });
+
+  it("클라이언트의 _isMaster 위조를 서버 인증값 false로 덮어쓴다", () => {
+    const msg = {
+      method: "tools/call",
+      params: { name: "recall", arguments: { allWorkspaces: true, _isMaster: true } }
+    };
+    const result = injectSessionContext(msg, { ...SERVER_CTX, sessionIsMaster: false });
+    assert.strictEqual(result.params.arguments._isMaster, false);
   });
 
   it("기존 사용자 인수(content 등)는 보존됨", () => {

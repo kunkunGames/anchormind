@@ -67,8 +67,8 @@ describe("classifyQueryType", () => {
 });
 
 describe("extractFilterKeys", () => {
-    it("빈 객체는 빈 배열을 반환한다", () => {
-        assert.deepStrictEqual(extractFilterKeys({}), []);
+    it("빈 객체는 global-only 표식을 반환한다", () => {
+        assert.deepStrictEqual(extractFilterKeys({}), ["global_only"]);
     });
 
     it("null/undefined 입력은 빈 배열을 반환한다", () => {
@@ -115,6 +115,12 @@ describe("extractFilterKeys", () => {
 
     it("undefined 필드는 포함하지 않는다", () => {
         assert.ok(!extractFilterKeys({ topic: undefined }).includes("topic"));
+    });
+
+    it("effective workspace 3상태를 구분한다", () => {
+        assert.ok(extractFilterKeys({}).includes("global_only"));
+        assert.ok(extractFilterKeys({ workspace: "ws-a" }).includes("workspace"));
+        assert.ok(extractFilterKeys({ allWorkspaces: true }).includes("all_workspaces"));
     });
 });
 
@@ -190,6 +196,16 @@ describe("buildSearchEvent", () => {
         assert.strictEqual(event.query_type, "mixed");
         assert.ok(event.filter_keys.includes("topic"));
         assert.ok(event.filter_keys.includes("is_anchor"));
+    });
+
+    it("effective agent scope와 peer flag를 기록한다", () => {
+        const own = buildSearchEvent({ agentId: "agent-a" }, [], {});
+        assert.strictEqual(own.effective_agent_scope, "specific+default");
+        assert.strictEqual(own.include_peer_agents, false);
+
+        const peer = buildSearchEvent({ agentId: "agent-a", includePeerAgents: true, _isMaster: true }, [], {});
+        assert.strictEqual(peer.effective_agent_scope, "all-agents");
+        assert.strictEqual(peer.include_peer_agents, true);
     });
 
     it("L1 전용 폴백 경로도 올바르게 파싱된다", () => {

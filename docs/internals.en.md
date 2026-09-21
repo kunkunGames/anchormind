@@ -17,7 +17,7 @@ MemoryManager is a thin facade. Business logic is delegated to 4 processors unde
 
 | Module | Delegated to | Role |
 |--------|-------------|------|
-| `ContextBuilder` | `context()` | Core/Working/Anchor Memory composition, rankedInjection, context hint generation |
+| `ContextBuilder` | `context()` | Anchor/Core/Learning/Working ID deduplication, minimum-slot token selection, shared flat/structured/rankedInjection composition, and context hints |
 | `ReflectProcessor` | `reflect()` | summary/decisions/errors_resolved/new_procedures/open_questions fragment conversion and storage, episode creation, Working Memory cleanup |
 | `BatchRememberProcessor` | `batchRemember()` | Phase A (validation) → Phase B (transactional INSERT) → Phase C (post-processing) 3-stage batch storage. When Redis is available, Phase B is delegated to `_enqueueAsync()` for async processing by BatchRememberWorker. Uses `getBatchPool()` (dedicated batch pool) for DB connections |
 | `QuotaChecker` | `remember()` entry | Per-API-key fragment quota (fragment_limit) check |
@@ -28,7 +28,7 @@ Search-related modules are separated into `lib/memory/read/`.
 | Module | Role |
 |--------|------|
 | `FragmentSearch` (`lib/memory/read/FragmentSearch.js`) | Orchestrates the L1-L4 search pipeline |
-| `SearchScope` (`lib/memory/read/SearchScope.js`) | A single contract object that consistently passes workspace, caseId, resolutionStatus, phase, and affect filters to all search layers |
+| `SearchScope` (`lib/memory/read/SearchScope.js`) | A single contract object that consistently passes workspace, caseId, resolutionStatus, phase, affect, type, topic, and isAnchor filters to all search layers |
 | `SearchSideEffects` (`lib/memory/read/SearchSideEffects.js`) | Isolates post-search side effects (search event persistence, SearchParamAdaptor learning signal) into a single module |
 
 Search-related modules live under `lib/memory/read/`; import paths follow the actual file locations directly.
@@ -81,9 +81,9 @@ recall(query)
   ├── L3 PostgreSQL full-text search (morpheme; MorphemeTokenizer local CPU analyzer → morpheme_dict → tsquery)
   ├── L4 Cross-Encoder Reranker (top 30 from RRF)
   ├── RRF merge (k=60)
-  ├── SearchScope.applyTo() filter — workspace/caseId/resolutionStatus/phase/affect consistency
+  ├── SearchScope.applyTo() filter — workspace/caseId/resolutionStatus/phase/affect/type/topic/isAnchor consistency
   │     All layers inside _executeSearch() share the same SearchScope instance
-  │     No post-processing correction needed after _executeSearch() completes
+  │     search() reapplies the same SearchScope contract after layer prefilters
   ├── token budget truncation (tokenBudget)
   ├── valid_to filter
   ├── explanations (ExplanationBuilder.annotate)
@@ -94,13 +94,15 @@ recall(query)
   │     L1/L2/RRF cache stages retain full fields; pick is applied only at final return
   └── commitSearchSideEffects() → returns _meta.searchEventId
         Delegated to SearchSideEffects module. Search event persistence + SearchParamAdaptor learning.
-        SearchScope filter is already applied inside _executeSearch(), so no additional
-        post-processing correction is needed here; only searchEventId is returned.
+        search() applies the final common SearchScope filter before ranking and token trimming;
+        this step only records and returns searchEventId.
 ```
 
 `pickFields` removes fields outside the 19-item whitelist (`id, content, type, importance, topic, ..., key_id, key_name`). It is not applied to cache stages (L1 warm hits, RRF intermediate objects) to preserve cache efficiency.
 
-**SearchScope contract:** The `SearchScope.fromQuery(sq)` static factory creates a scope instance from the normalized sq returned by `_buildSearchQuery()`. The `scope.applyTo(fragment)` method checks workspace, caseId, resolutionStatus, phase, and affect simultaneously and returns false to exclude a fragment from results. HotCache, L3, and graph call sites all reference the same instance, ensuring consistent filtering across layers. `_executeSearch()` performs no separate post-processing correction step.
+**Deterministic ranking contract:** Search, RRF, reranker, graph, and context injection preserve each path's existing descending primary score. Only ties use `created_at DESC, id ASC`. Write paths populate `created_at` by default, and the SQL deliberately omits explicit `NULLS LAST` so existing PostgreSQL descending indexes remain usable. Exceptional null values follow PostgreSQL's default `NULLS FIRST` order in both SQL and JavaScript. Unranked Redis Set candidates contribute equal RRF scores, and hydration candidates use the same comparator, so cold DB and warm-cache results have the same ID order. Working Memory preserves its existing `added_at DESC NULLS LAST, id ASC` shape. `recall` retains offset cursors to preserve rolling-deployment compatibility and the established semantics of dynamic reranker candidate sets, while reusing the cursor's fixed `anchorTime` for reranker recency boosts. ANN vector search keeps a distance-only SQL ordering for index eligibility and deterministically sorts distance ties within the selected candidate set in JavaScript.
+
+**SearchScope contract:** The `SearchScope.fromQuery(sq)` static factory creates a scope instance from the normalized sq returned by `_buildSearchQuery()`. The `scope.applyTo(fragment)` method checks workspace, caseId, resolutionStatus, phase, affect, type, topic, and isAnchor simultaneously and returns false to exclude a fragment from results. HotCache, L3, and graph prefilters plus the final common filter in `search()` share the same contract, covering hydration and auxiliary search paths as well.
 
 ---
 
@@ -136,7 +138,7 @@ Stages are declared as a `stageDefs` array. Adding a new stage requires only a s
 10. `retro_link` — GraphLinker.retroLink() retroactively links up to 20 orphan fragments (have embedding, no links)
 11. `utility_score_update` — updates scores with `importance * (1 + ln(max(access_count,1))) / age_months^0.3`
 12. `requeue_high_ema` — registers ema_activation>0.3 AND importance<0.4 fragments for MemoryEvaluator re-evaluation
-13. `promote_anchors` — promotes fragments with access_count >= 10 + importance >= 0.8 to `is_anchor=true`
+13. `promote_anchors` — promotes fragments with access_count >= 10 + importance >= 0.8 to `is_anchor=true`. `MEMENTO_AUTO_PROMOTE_ANCHORS=false` skips only this stage with reason `disabled_by_config` (default: true).
 14. `detect_contradictions` — 3-stage hybrid contradiction detection. pgvector cosine > 0.85 candidate extraction -> mDeBERTa NLI -> Gemini CLI escalation. Results returned as separate `nliResolvedDirectly` and `nliSkippedAsNonContra` counts
 15. `detect_supersessions` — Gemini CLI judges supersession relationships for fragment pairs with embedding similarity 0.7~0.85. Operates complementarily to GraphLinker's >= 0.85 range
 16. `process_pending_contradictions` — when Gemini CLI is available, dequeues up to 10 items from Redis pending queue for re-evaluation
@@ -231,6 +233,12 @@ Trigger condition: `(now - session.lastAccessedAt) > idleThresholdMs` AND (`sess
 ### SSE Disconnect
 
 When an SSE stream closes (`res.on('close')`), the server removes only the SSE response object; the session itself is kept alive. The session persists until its Redis TTL expires, allowing a reconnecting client to resume the same session.
+
+### OAuth security model — identities without a keyId are not master
+
+Authentication preserves an explicit `isMaster` decision instead of inferring master access from `keyId=null`. Direct access-key and explicit auth-disabled sessions are master; API-key-bound OAuth sessions carry their key, group, workspace, and permissions. A generic non-API-key OAuth session remains `isMaster=false`. Even when compatibility mode permits that authentication, the missing key/permission identity causes memory tools and resource reads to fail closed. The current API-key/OAuth schema does not support binding a non-default agent identity.
+
+OAuth authentication first tries `bound_key_id` via `validateApiKeyById`, then `is_api_key=true` via `validateApiKeyFromDB(client_id)`. Generic non-API-key OAuth is rejected by default with `MCP_REJECT_NONAPIKEY_OAUTH=true`; setting false permits authentication only, not memory tool/resource access without a bound key/permission identity.
 
 ### OAuth refresh_token is_api_key Propagation
 
@@ -617,7 +625,7 @@ The resolved mode is stored in the session object and reused for all subsequent 
 
 ### tools/list Filtering
 
-`filterTools(tools, presetName, isMaster)` removes tools in the `excluded_tools` set and returns the filtered list. Presets with `requiresMaster=true` are only applied to master-key sessions (`keyId === null`); regular API key sessions ignore such presets and receive the full tool list.
+`filterTools(tools, presetName, isMaster)` removes tools in the `excluded_tools` set and returns the filtered list. Presets with `requiresMaster=true` apply only to explicitly authenticated master sessions (`isMaster === true`). API-key sessions ignore master-only presets but still apply permission and master-only tool filtering.
 
 When assembling the `get_skill_guide` response, `getSkillGuideOverride(presetName, isMaster)` returns the `skill_guide_override` string from the preset. If present, this overrides the default skill guide text.
 
@@ -768,3 +776,11 @@ export async function dispatchChain(chain, prompt, options = {}, deps = {})
 The chain is an array of provider configurations. Providers are tried in order; on success the result is returned immediately. On failure (429, semaphore timeout, error), execution moves to the next fallback provider.
 
 **Concurrency control:** `getSemaphore(chainKey, limit, waitMs)` acquires a per-provider independent semaphore. The chainKey is composed of `provider|baseUrl|model|apiKeyHash`. Exceeding `LLM_CONCURRENCY_WAIT_MS` (default 30000ms) records the current provider as failed and tries the next. Chain deadline is calculated from `deps.startedAt` and `LLM_CHAIN_TIMEOUT_MS`; when remaining time reaches 0 the chain terminates immediately.
+
+## Agent scope and snapshot migration
+
+`resolveAgentScope` validates explicit `_isMaster=true` for peer requests at scope resolution, enforcing the same master contract for CLI/embedded callers. Omitting agentId selects default; specifying one selects that agent plus default. Legacy unbound compatibility defaults to true for this transition release; each relaxed request emits a warning and increments `mcp_legacy_unbound_agent_scope_total`. After migration, setting false rejects non-default agent requests from ordinary API keys.
+
+Migration-047 only adds snapshot columns to `fragment_versions`/`case_events`. Inspect pending warnings from `migrate`, stop old writers, then run the CLI backfill. NULL snapshots are quarantined from reads, including peer reads. Backfill recounts after a zero-update batch; remaining backfillable or sourceMissing/sourceDeleted rows produce `SNAPSHOT_BACKFILL_INCOMPLETE`. Shared normalization moves the fragment and version agent snapshots in one transaction. Rollback drops snapshot columns but does not undo normalization.
+
+Old sessions require reconnection and initialize. Old sessions reused without bearer credentials and without isMaster are denied tool access. `memory://stats`/`memory://topics` aggregate only current default-agent fragments and expose no master peer input. `search_traces`/`reconstruct_history` also default to the default-agent scope.

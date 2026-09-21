@@ -40,7 +40,10 @@ mock.module("../../lib/logger.js", {
 
 mock.module("../../config/memory.js", {
     namedExports: {
-        MEMORY_CONFIG: { gc: { utilityThreshold: 0.15 }, dedup: {} },
+        MEMORY_CONFIG: {
+            gc: { utilityThreshold: 0.15 },
+            dedup: {},
+        },
     },
 });
 

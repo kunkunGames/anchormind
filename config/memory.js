@@ -15,6 +15,33 @@ function envInt(name, def, min, max) {
   return Math.min(max, Math.max(min, raw));
 }
 
+/** 환경 변수를 boolean으로 파싱한다. 잘못된 값은 기동 검증기가 보고한다. */
+function envBool(name, def) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return def;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return raw;
+}
+
+/**
+ * 환경 변수를 정수로 파싱하되 잘못된 값을 보존한다.
+ *
+ * 범위가 다른 설정값과의 관계로 결정되는 경우(예: reserve <= total)는 여기서
+ * 클램프하지 않고 NaN/범위 밖 값을 런타임 검증기로 넘겨 fail-fast한다.
+ */
+function envStrictInt(name, def) {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return def;
+  if (!/^[+-]?\d+$/.test(raw.trim())) return Number.NaN;
+  return Number(raw.trim());
+}
+
+const contextAnchorLimit = envInt("MEMENTO_CONTEXT_ANCHOR_LIMIT", 20, 1, 30);
+// 기본 20/10 비율을 유지한다. total만 낮춘 기존 배포도 기동 실패하지 않고,
+// 예약분이 전체 슬롯을 자동으로 독점하지 않도록 미설정 reserve를 total의 절반으로 유도한다.
+const defaultWorkspaceAnchorReserve = Math.min(10, Math.floor(contextAnchorLimit / 2));
+
 export const MEMORY_CONFIG = {
   /** 복합 랭킹 가중치 (합계 1.0) */
   ranking: {
@@ -179,7 +206,11 @@ export const MEMORY_CONFIG = {
   },
   /** 컨텍스트 주입 설정 */
   contextInjection: {
-    maxAnchorFragments : envInt("MEMENTO_CONTEXT_ANCHOR_LIMIT", 10, 1, 30),
+    maxAnchorFragments      : contextAnchorLimit,
+    workspaceAnchorReserve  : envStrictInt(
+      "MEMENTO_CONTEXT_WORKSPACE_ANCHOR_RESERVE",
+      defaultWorkspaceAnchorReserve
+    ),
     maxCoreFragments   : 15,
     maxWmFragments     : 10,
     typeSlots          : {
@@ -292,6 +323,8 @@ export const MEMORY_CONFIG = {
    * 수정일: 2026-05-19
    */
   consolidate: {
+    /** 기존 자동 앵커 승격 동작을 유지하되 운영자가 명시적으로 끌 수 있다. */
+    autoPromoteAnchors: envBool("MEMENTO_AUTO_PROMOTE_ANCHORS", true),
     /**
      * 파괴 단계 안전 게이트.
      *

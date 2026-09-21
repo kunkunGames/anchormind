@@ -17,7 +17,7 @@ AnchorMind 서버는 AI 에이전트의 세션 간 장기 기억을 파편(Fragm
 - recall/context 응답에서 `_meta.serverTime.display_kst` 또는 `_meta.serverTime.iso`로 현재 시점을 재확인하고 파편의 `created_at`·`age_days`와 대조하여 stale 여부를 판단한다. 응답 메타에 명시된 서버 시각이 자체 추정 시각과 다르면 서버 시각이 정답이다.
 - 긴 파편 자동 분할(`splitLongFragments`)은 자식 파편에 본문 기반 keywords를 부여하므로 분할된 내용도 키워드 검색으로 회수된다. 자식 합집합이 원문의 수치 앵커(날짜·금액·비율)를 모두 담지 못하면 분할을 중단하고 원문을 그대로 유지하며, 자식이 남아 있는 원문은 GC 물리 삭제 대상에서 제외된다.
 - `lib/storage/` 어댑터 계층이 `getStorage()` 팩토리 형태로 존재하며, `MEMENTO_STORAGE` 환경변수로 storage 백엔드를 선택한다.
-- 검색 레이어는 `lib/memory/read/SearchScope.js`를 통해 `(workspace, caseId, resolutionStatus, phase, affect, type, topic, keyId)` scope를 처음부터 정합 적용한다.
+- 검색 레이어는 `lib/memory/read/SearchScope.js`를 통해 `(workspace, caseId, resolutionStatus, phase, affect, type, topic, isAnchor, keyId)` scope를 처음부터 정합 적용한다.
 - 실제 로직은 `lib/memory/processors/` 4개 클래스(MemoryRememberer·MemoryRecaller·MemoryReflector·MemoryLinker)와 `lib/memory/` 하위 6개 서브디렉토리(`read/`, `write/`, `link/`, `consolidate/`, `embedding/`, `signals/`)로 구성된다.
 
 ### LLM 동시성 제어
@@ -441,7 +441,7 @@ AnchorMind는 MCP(Model Context Protocol) 기반의 장기 기억 서버다. AI 
 ```
 context() 호출
 -> core_memory: 앵커 + 고중요도 파편 (preference, error, procedure)
-   (앵커는 중요도순 상위 N개가 항상 포함된다. N은 서버의 MEMENTO_CONTEXT_ANCHOR_LIMIT 설정, 기본 10)
+   (앵커는 기본 최대 20개가 항상 포함된다. effective workspace가 있으면 기본 10개를 workspace 상위 anchor에 먼저 예약하고, 나머지는 잔여 workspace/global 통합 중요도순으로 채운다. total만 바꾸면 reserve는 total/2 내림, 최대 10으로 유도된다. `MEMENTO_CONTEXT_ANCHOR_LIMIT`, `MEMENTO_CONTEXT_WORKSPACE_ANCHOR_RESERVE`로 설정)
 -> working_memory: 현재 세션의 워킹 메모리
 -> system_hints: 미반영 세션 경고, 시스템 알림
 ```
@@ -547,6 +547,8 @@ reflect 규칙:
 - reflect도 workspace를 받는다. 멀티 프로젝트 환경에서는 reflect에 workspace를 반드시 지정해 세션 요약이 다른 프로젝트 context에 주입되는 것을 방지한다.
 - 전역 기억(모든 workspace에서 조회)으로 저장하려면 workspace를 의도적으로 비우고, 키에도 default_workspace가 없어야 한다. 의도치 않은 미기입과 의도된 전역 저장은 구분해서 판단한다.
 - 검색 시 workspace를 지정하면 해당 workspace 파편과 workspace=NULL(전역) 파편이 함께 반환된다.
+- `default_workspace`가 없는 공유 키에서 쓰기마다 workspace를 명시했다면 recall/context에도 같은 workspace를 반드시 명시한다. 생략하면 전역(NULL) 범위만 조회되며, 빈 결과의 `_meta.hints[0]`가 workspace를 지정한 재검색을 안내한다.
+- 업그레이드 전 Redis Working Memory 항목처럼 workspace 필드가 없는 데이터는 scoped/global-only context에서 제외된다. master의 `allWorkspaces=true` 조회에서만 범위를 안전하게 넓혀 포함할 수 있다.
 
 #### workspace 활용 예시
 
@@ -716,7 +718,6 @@ curl -s -X POST $SERVER_URL \
   -H "Authorization: Bearer $ACCESS_KEY" \
   -H "MCP-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reflect","arguments":{
-    "agentId":"AGENT_ID",
     "summary":["요약 내용1","요약 내용2"],
     "decisions":["기술/아키텍처 결정사항"],
     "errors_resolved":["원인: X → 해결: Y"]
@@ -728,7 +729,6 @@ curl -s -X POST $SERVER_URL \
   -H "Authorization: Bearer $ACCESS_KEY" \
   -H "MCP-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"remember","arguments":{
-    "agentId":"AGENT_ID",
     "content":"저장할 내용",
     "topic":"주제",
     "type":"fact",
@@ -742,7 +742,6 @@ curl -s -X POST $SERVER_URL \
   -H "Authorization: Bearer $ACCESS_KEY" \
   -H "MCP-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"recall","arguments":{
-    "agentId":"AGENT_ID",
     "text":"검색어",
     "keywords":["키워드"]
   }}}'
@@ -753,7 +752,6 @@ curl -s -X POST $SERVER_URL \
   -H "Authorization: Bearer $ACCESS_KEY" \
   -H "MCP-Session-Id: $SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"context","arguments":{
-    "agentId":"AGENT_ID",
     "structured":true
   }}}'
 ```
@@ -798,7 +796,7 @@ curl 응답 검증 체크:
 
 1. 같은 API 키 또는 같은 키 그룹 + 동일 workspace를 사용한다. 파편 공유 범위는 키 그룹 단위다.
 2. 공동 작업은 동일 caseId를 공유하고, 진행 파편은 즉시 remember한다(기본 scope=permanent — 저장 즉시 상대 에이전트가 recall로 조회 가능). scope=session 파편은 세션 전용 스크래치라 공유되지 않는다.
-3. agentId 정책을 통일한다(default 또는 팀 고정 ID). 에이전트마다 다른 agentId를 쓰면 recall의 agent 필터 때문에 상대 파편이 검색에서 제외된다.
+3. 공동 기억은 `agentId`를 생략하거나 `default`로 통일한다. 일반 API key의 팀 고정 ID는 신뢰 가능한 agent 인증이 아니다. 전환 릴리즈의 legacy 호환 기본값은 true지만 이관 후 `MEMENTO_ALLOW_LEGACY_UNBOUND_AGENT_SCOPE=false`로 차단하며, specific agent 관리와 peer 조회는 master 권한을 사용한다.
 4. 중간 가설은 assertionStatus="inferred"로 저장하고, 검증한 에이전트가 amend로 verified/rejected 전환한다. 미검증 가설과 확정 사실을 섞지 않는 것이 협업 오염 방지의 핵심이다.
 5. 상대 에이전트의 파편이 유용했으면 tool_feedback(relevant=true)을 보낸다 — 링크 가중치 강화가 팀 검색 품질을 누적 개선한다.
 6. 전체 흐름 복기는 reconstruct_history(caseId) 또는 recall(caseMode=true). 모순 발견 시 link(relationType="contradicts") 명시 후 대표 파편을 amend로 정리한다.
@@ -886,7 +884,7 @@ async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기�
 | linkRelationType | string | - | 연결 관계 필터 (related, caused_by, resolved_by, part_of, contradicts) |
 | threshold | number | - | similarity 임계값 0~1 |
 | includeSuperseded | boolean | - | 만료 파편 포함. 기본 false. |
-| includePeerAgents | boolean | - | true 시 같은 키/workspace 스코프 내 다른 agentId 파편 포함 (멀티에이전트 협업용). 키·workspace 경계는 유지. 기본 false. |
+| includePeerAgents | boolean | - | master 전용. 같은 키/workspace 범위의 다른 agent 파편 포함. 일반 API 키는 권한 오류. 기본 false. |
 | includeKeyName | boolean | X | true 시 각 파편에 key_id·key_name(액세스 키 라벨) 포함. 같은 키 그룹 스코프의 정보만 노출. 팀 공유 workspace에서 파편 생성 주체 식별용. 기본 false |
 | asOf | string | - | ISO 8601. 해당 시점에 가까운 파편을 상위로 올리는 시간 근접 랭킹 기준(anchorTime)으로만 작동. 주의: 그 시점에 유효했던 버전을 복원하는 bitemporal as-of 필터가 아니며, 과거 시점 스냅샷 조회는 미구현. 특정 기간의 파편을 실제로 한정하려면 timeRange를 쓴다. |
 | timeRange | object | - | {from, to} 생성시각(created_at) 기준 시간창 필터. ISO 8601과 한국어 자연어("3일 전","지난 주","오늘") 모두 지원. 지정 시 시간 검색 경로가 동작하고 RRF에서 시간 근접 가중이 부스트된다. |
@@ -896,7 +894,8 @@ async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기�
 | includeContext | boolean | - | context_summary + 인접 파편 포함 |
 | includeKeywords | boolean | - | 응답에 keywords 배열 포함 |
 | agentId | string | - | 에이전트 ID |
-| workspace | string | - | 검색 범위 제한. 지정 시 해당 workspace + 전역(NULL) 파편만 반환. |
+| workspace | string | - | 지정 workspace + 전역(NULL). 미지정 시 key default를 적용하고, 둘 다 없으면 전역(NULL)만 반환. |
+| allWorkspaces | boolean | - | master 전용 전체 workspace 조회. 일반 API key는 권한 오류. |
 | contextText | string | - | 현재 대화 맥락 텍스트. 관련 파편을 선제적으로 활성화한다 (ENABLE_SPREADING_ACTIVATION=true 시 동작). |
 | caseId | string | - | 케이스 ID 필터. 해당 케이스에 속한 파편만 반환. |
 | resolutionStatus | string | - | 해결 상태 필터 (open / resolved / abandoned) |
@@ -904,10 +903,12 @@ async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기�
 | caseMode | boolean | - | true 시 CBR 모드. case_id별 (goal, events, outcome) 트리플로 반환 |
 | maxCases | number | - | caseMode 최대 케이스 수 (기본 5, 상한 10) |
 | minImportance | number | - | 최소 중요도 필터 (0~1). 이 값 이상의 importance만 반환. |
-| isAnchor | boolean | - | true 시 앵커(고정) 파편만 반환 |
+| isAnchor | boolean | - | 앵커 필터. true는 앵커만, false는 비앵커만 반환하며 미지정 시 둘 다 반환 |
 | depth | string | - | 검색 깊이. high-level(decision/episode), detail(전체), tool-level(procedure/error/fact) |
 | affect | string/string[] | - | 감정 태그 필터. neutral / frustration / confidence / surprise / doubt / satisfaction. 배열 또는 단일 문자열 지원 |
 | fields | string[] | - | 응답에 포함할 파편 필드 목록(sparse fields). 미지정 시 전체 반환. 지원 키: id, content, type, topic, keywords, importance, created_at, access_count, confidence, linked, explanations, workspace, context_summary, case_id, valid_to, affect, ema_activation, key_id, key_name |
+
+`caseMode=true` 응답의 `fragment_count`는 현재 키 그룹·workspace·유효 상태·`isAnchor` 필터를 통과해 해당 케이스의 대표값 후보가 된 파편 수다. 케이스에 평생 누적된 전체 파편 수를 뜻하지 않는다. 이벤트는 source 파편의 현재 앵커 상태로 필터링하지 않으며, 현재 키 그룹에서 볼 수 있는 이력을 케이스당 최대 20건 반환한다.
 
 ### forget
 
@@ -1000,7 +1001,8 @@ task_effectiveness 세부 필드:
 | structured | boolean | - | 계층 구조 반환. 기본 false. |
 | includeKeyName | boolean | X | true 시 fragments 각 항목에 key_id·key_name(액세스 키 라벨) 포함. structured=true 트리 응답에는 적용되지 않음. 기본 false |
 | agentId | string | - | 에이전트 ID |
-| workspace | string | - | 컨텍스트 로드 범위. 지정 시 해당 workspace + 전역(NULL) 파편만 포함. |
+| workspace | string | - | 지정 workspace + 전역(NULL). 미지정 시 key default를 적용하고, 둘 다 없으면 전역(NULL)만 포함. |
+| allWorkspaces | boolean | - | master 전용 전체 workspace context 조회. |
 
 ### tool_feedback
 
@@ -1023,7 +1025,7 @@ fragment_ids를 지정하고 ENABLE_RECONSOLIDATION=true인 경우: relevant=fal
 
 ### memory_stats
 
-기억 시스템 통계. 파라미터 없음.
+기억 시스템 전역 통계. master key 전용, 파라미터 없음.
 
 ### memory_consolidate
 
@@ -1041,6 +1043,9 @@ fragment_ids를 지정하고 ENABLE_RECONSOLIDATION=true인 경우: relevant=fal
 |------|------|------|------|
 | startId | string | O | 시작 파편 ID (error 권장) |
 | agentId | string | - | 에이전트 ID |
+| includePeerAgents | boolean | - | master 전용. 같은 key/workspace 범위의 다른 agent 노드 포함. 기본 false. |
+| workspace | string | - | 생략 시 key 기본값, 둘 다 없으면 전역(NULL) 범위. 시작·이웃 파편에 함께 적용. |
+| allWorkspaces | boolean | - | master 전용. workspace 필터를 제거하고 agent/key 범위는 유지. 기본 false. |
 
 startId가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permission"` 오류가 반환된다.
 
@@ -1052,7 +1057,9 @@ startId가 타 테넌트 소유 파편인 경우 `"Fragment not found or no perm
 |------|------|------|------|
 | id | string | O | 조회할 파편 ID |
 | agentId | string | - | 에이전트 ID |
-| includePeerAgents | boolean | - | true 시 같은 API 키 스코프 내 다른 agentId의 파편 이력도 조회. 테넌트(키) 경계는 유지. 기본 false |
+| includePeerAgents | boolean | - | master 전용. 같은 key/workspace 범위의 다른 agent 이력 포함. 일반 API 키는 권한 오류. 기본 false. |
+| workspace | string | - | 생략 시 key 기본값, 둘 다 없으면 전역(NULL) 범위. 현재 파편·버전·superseded chain에 함께 적용. |
+| allWorkspaces | boolean | - | master 전용. workspace 필터를 제거하고 agent/key 범위는 유지. 기본 false. |
 
 id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permission"` 오류가 반환된다.
 
@@ -1080,6 +1087,9 @@ id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permissio
 | query | string | - | content 키워드 추가 필터 |
 | limit | number | 100 | 최대 반환 파편 수 (최대 500) |
 | workspace | string | - | 워크스페이스 필터 |
+| allWorkspaces | boolean | false | master 전용. true이면 timeline·event·evidence·인과 링크의 workspace 필터를 제거 |
+| agentId | string | default | 특정 agent 지정은 master 전용 |
+| includePeerAgents | boolean | false | master 전용. 같은 key/workspace 범위의 모든 agent 포함 |
 
 반환값:
 - `ordered_timeline`: 시간순 파편 배열 (각 항목에 agent_id 포함 — 멀티에이전트 케이스에서 기여 에이전트 식별용)
@@ -1110,6 +1120,9 @@ id가 타 테넌트 소유 파편인 경우 `"Fragment not found or no permissio
 | session_id | string | - | 특정 세션 필터 |
 | time_range | object | - | { from: ISO8601, to: ISO8601 } |
 | workspace | string | - | 워크스페이스 필터. 지정 시 해당 workspace + 전역(NULL) 파편만 대상 |
+| allWorkspaces | boolean | false | master 전용. true이면 trace의 workspace 필터를 제거 |
+| agentId | string | default | 특정 agent 지정은 master 전용 |
+| includePeerAgents | boolean | false | master 전용. 같은 key/workspace 범위의 모든 agent 포함 |
 | limit | number | 20 | 최대 반환 수 (최대 100) |
 
 snake_case 파라미터에는 camelCase alias가 있다: `eventType`, `entityKey`, `caseId`, `sessionId`. 두 표기 중 어느 쪽을 보내도 동일하게 처리된다.
@@ -1125,7 +1138,7 @@ snake_case 파라미터에는 camelCase alias가 있다: `eventType`, `entityKey
 
 **목적**: 현재 세션을 종료하고 새 `sessionId`를 발급한다. 토큰 탈취 의심 시 또는 주기적 로테이션에 사용한다.
 
-**언제 사용**: 키 노출이 의심되거나 스케줄된 회전 시점에서 동일 `bound_key_id` / `workspace` / `permissions`로 새 세션을 발급받을 때.
+**언제 사용**: 키 노출이 의심되거나 스케줄된 회전 시점에서 credential의 `bound_key_id` / key group / `permissions`를 재검증하고, 기존 세션의 `defaultWorkspace` / `mode`를 유지한 새 세션을 발급받을 때.
 
 | 파라미터 | 타입 | 기본값 | 설명 |
 |---|---|---|---|

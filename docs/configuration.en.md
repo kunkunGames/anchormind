@@ -21,10 +21,11 @@
 | RATE_LIMIT_PER_IP | 30 | Per-IP requests per minute (unauthenticated) |
 | RATE_LIMIT_PER_KEY | 100 | Per-API-key requests per minute (authenticated) |
 | CONSOLIDATE_INTERVAL_MS | 21600000 | Auto-maintenance (consolidate) interval (ms). Default 6 hours |
+| MEMENTO_AUTO_PROMOTE_ANCHORS | true | When `false`, skips only automatic anchor promotion; existing anchors and other stages are unchanged |
 | EVALUATOR_MAX_QUEUE | 100 | MemoryEvaluator queue size cap (older jobs dropped on overflow) |
 | OAUTH_TRUSTED_ORIGINS | (none) | Additional OAuth redirect_uri trusted domains (comma-separated, origin level). Added on top of default trusted domains (claude.ai, chatgpt.com, platform.openai.com, copilot.microsoft.com, gemini.google.com). Only specify additional origins to allow |
 | MCP_STRICT_ORIGIN | false | When `true`, enables strict Origin header validation (DNS rebinding defense). Requests from Origins not in the allowlist (`OAUTH_TRUSTED_ORIGINS` + `ALLOWED_ORIGINS` + default trusted domains) are rejected with 403. Requests without an Origin header (CLI/curl) are always allowed. **opt-in** — defaults to `false` to preserve existing behavior |
-| MCP_REJECT_NONAPIKEY_OAUTH | true | Set to `false` to allow `is_api_key=false` OAuth tokens (backward compatibility). Default `true` — non-API-key OAuth tokens create a `keyId=null` session with master-level access to all fragments. API-key-based OAuth tokens (`is_api_key=true`) and Bearer ACCESS_KEY direct use are unaffected |
+| MCP_REJECT_NONAPIKEY_OAUTH | true | The default `true` rejects authentication with `is_api_key=false` OAuth tokens. `false` permits that authentication only and never grants master privileges. OAuth sessions without an API-key binding receive `-32001` on tool calls. API-key-based OAuth tokens (`is_api_key=true`) and direct Bearer ACCESS_KEY use are unaffected |
 | MCP_ALLOW_AUTO_DCR_REGISTER | false | Set to `true` to allow auto-registration of unregistered `client_id` in `/authorize` (legacy behavior). Default `false` — enforces RFC 7591 `POST /register` endpoint for client registration |
 | OAUTH_ALLOWED_REDIRECT_URIS | (none) | OAuth redirect_uri exact-match allowed list (comma-separated). Operates independently of OAUTH_TRUSTED_ORIGINS |
 | DEFAULT_DAILY_LIMIT | 10000 | Default daily call limit when creating API keys |
@@ -51,7 +52,8 @@
 | MEMENTO_STORAGE | pgvector | Storage adapter selection. `pgvector` (default, PostgreSQL + pgvector). Additional adapters can be registered in `lib/storage/`. Changing this value requires all fragments to be re-indexed in the target backend |
 | MEMENTO_KEYWORD_SEMANTIC_FALLBACK | true | Set `false` to disable the L3 semantic supplement for keywords-only recall queries without text. When active, one embedding of the normalized keywords text runs in parallel with L2, recovering fragments whose stored keywords lack the query terms via content matching |
 | MEMENTO_KEYWORD_FALLBACK_TIMEOUT_MS | 1500 | Upper bound (ms, clamped 100-60000) for the keyword-supplement L3 run. On timeout it resolves to an empty result and leaves `L3kw:timeout` in searchPath |
-| MEMENTO_CONTEXT_ANCHOR_LIMIT | 10 | Maximum number of anchor (isAnchor) fragments always included in context responses. Clamped to 1-30; falls back to 10 on parse failure. Anchors are not trimmed by tokenBudget, so this count cap is the only injection limit |
+| MEMENTO_CONTEXT_ANCHOR_LIMIT | 20 | Overall maximum number of anchor (isAnchor) fragments always included in context responses. The default changes from 10 to 20. Clamped to 1-30; falls back to 20 on parse failure. Anchors are not trimmed by tokenBudget, so this count cap is the only injection limit. Set 10 to retain the prior injection count |
+| MEMENTO_CONTEXT_WORKSPACE_ANCHOR_RESERVE | 10 | Slots reserved first for the highest-importance anchors in the effective workspace. When unset, derived as `floor(total / 2)` (capped at 10): 10 for the default total of 20 and 5 for a custom total of 10. An explicit value must be an integer from 0 through the total or startup validation fails. Not applied when no workspace is effective |
 | MEMENTO_RECALL_MIN_SIM_FLOOR | (unset) | Opt-in floor for the adaptive similarity threshold returned by `SearchParamAdaptor.getMinSimilarity`. Example: when set to `0.45`, the returned value is clamped to at least 0.45 even if the learned value is lower. Unset preserves the existing behavior |
 | MEMENTO_MORPHEME_TOKENIZER | local | Morpheme tokenizer path. `local` (default): routes to per-language CPU analyzers — garu-ko (Korean), natural PorterStemmer (English), @node-rs/jieba (Chinese), kuromoji (Japanese). `llm`: falls back to the LLM subprocess path (`MorphemeIndex._tokenizeViaLLM()`). |
 | MEMENTO_ENABLE_KUROMOJI | true | When `false`, skips loading the kuromoji Japanese analyzer, saving ~269MB resident memory. Useful for deployments with no Japanese fragments. Synced with `config/memory.js` `morphemeIndex.enableKuromoji`. |
@@ -265,6 +267,8 @@ This feature operates asynchronously only when `REDIS_ENABLED=true`. When `REDIS
 | REDIS_PORT | 6379 | Redis server port |
 | REDIS_PASSWORD | (none) | Redis authentication password |
 | REDIS_DB | 0 | Redis database number |
+| MEMENTO_REDIS_SESSION_FAIL_CLOSED | false | Fail the request when Redis session persistence fails. When false, warn and continue with the in-memory session |
+| MEMENTO_ALLOW_LEGACY_UNBOUND_AGENT_SCOPE | true | Transition compatibility for API-key non-default agentId claims. Each use emits a warning and increments `mcp_legacy_unbound_agent_scope_total`. It does not authenticate agents sharing a key; migrate clients, confirm no further increments, then set false for strict mode. includePeerAgents always requires master authentication |
 | REDIS_MASTER_NAME | mymaster | Sentinel master name |
 | REDIS_SENTINELS | localhost:26379, localhost:26380, localhost:26381 | Sentinel node list. Comma-separated host:port format |
 
@@ -435,6 +439,10 @@ Individual activation flags for the 3 stages that involve LLM rewriting and can 
 | `splitLongFragments` | `MEMENTO_CONSOLIDATE_SPLIT_LONG` | `true` | stage 5 | Splits long fragments into 2–3 atomic fragments. LLM determines split boundaries |
 | `detectContradictions` | `MEMENTO_CONSOLIDATE_DETECT_CONTRADICT` | `true` | stage 14 | NLI + LLM hybrid contradiction detection and contradicts link creation |
 | `compressOldFragments` | `MEMENTO_CONSOLIDATE_COMPRESS_OLD` | `false` | stage 8 | LLM-based compression summary of old fragment groups. Disabled by default |
+
+### consolidate.autoPromoteAnchors
+
+`MEMENTO_AUTO_PROMOTE_ANCHORS` is an opt-out for the automatic anchor-promotion stage. When unset or empty it defaults to `true`, preserving the existing behavior. When set to `false`, `promote_anchors` returns `status="skipped"` with `reason="disabled_by_config"` and performs no promotion UPDATE. Other non-empty values are rejected as configuration errors. It does not demote existing anchors or disable any other consolidation stage. Restart the server after changing the setting.
 
 A stage with its flag set to `false` emits `status: "skipped"` and proceeds to the next stage. `compressOldFragments` defaults to `false` because it modifies original fragment content.
 

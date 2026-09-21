@@ -44,7 +44,7 @@ import { shutdownPool, getPrimaryPool } from "./lib/tools/db.js";
 import { drainAllWorkers } from "./lib/memory/workers/registry.js";
 
 /** 메트릭 */
-import { recordHttpRequest } from "./lib/metrics.js";
+import { recordHttpRequest, setAnchorAutoPromotionEnabled } from "./lib/metrics.js";
 
 /** 스케줄러 */
 import { startSchedulers } from "./lib/scheduler.js";
@@ -59,6 +59,9 @@ import { installProcessGuards }     from "./lib/process-guards.js";
 
 /** 임베딩 차원 일관성 검증 */
 import { checkEmbeddingConsistency } from "./scripts/check-embedding-consistency.js";
+
+/** 미적용 migration 검사 */
+import { warnPendingMigrations } from "./lib/memory/admin/PendingMigrations.js";
 
 /** OpenAPI */
 import { validateAuthentication } from "./lib/auth.js";
@@ -130,7 +133,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: auth.error || "Unauthorized" }));
       return;
     }
-    const isMaster = auth.keyId == null;
+    const isMaster = auth.isMaster === true;
     const spec     = buildSpec(isMaster, isMaster ? null : (auth.permissions ?? []));
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -312,8 +315,10 @@ if (!ACCESS_KEY && !AUTH_DISABLED) {
   process.exit(78);
 }
 
+validateMemoryConfig(MEMORY_CONFIG);
+setAnchorAutoPromotionEnabled(MEMORY_CONFIG.consolidate?.autoPromoteAnchors !== false);
+
 server.listen(PORT, () => {
-  validateMemoryConfig(MEMORY_CONFIG);
   console.log(`Memento MCP HTTP server listening on port ${PORT}`);
   console.log("Streamable HTTP endpoints: POST/GET/DELETE /mcp");
   console.log("Legacy SSE endpoints: GET /sse, POST /message");
@@ -336,6 +341,7 @@ server.listen(PORT, () => {
       if (!await checkEmbeddingConsistency()) {
         process.exit(1);
       }
+      await warnPendingMigrations(pool, { error: (msg, meta) => logError(msg, null, meta) });
     }).catch(() => {});
   }
 

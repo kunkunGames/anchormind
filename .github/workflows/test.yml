@@ -19,10 +19,15 @@ jobs:
       - run: npm ci
       - name: Lint
         run: npm run lint
+      # 번호 중복은 파일 둘이 각각은 규약을 지키면서도 함께 있을 때만 어긋나므로
+      # 사람이 아니라 여기서 본다.
+      - name: Lint migrations
+        run: npm run lint:migrations
       # 런타임 의존성에 알려진 취약점이 있으면 여기서 막는다. 개발 의존성은
-      # 배포물에 실리지 않으므로 분리해 본다.
+      # 배포물에 실리지 않으므로 분리해 본다. 상류에 패치 판이 없어 올릴 데가 없는
+      # 권고는 audit-ci.jsonc 의 allowlist 에 사유와 함께 적는다.
       - name: Audit runtime dependencies
-        run: npm audit --omit=dev --audit-level=moderate
+        run: npm run audit:ci
       - name: Audit all dependencies (report only)
         run: npm audit --audit-level=high || true
       - name: All unit tests (Jest + node:test)
@@ -49,7 +54,7 @@ jobs:
       # 단위시험은 --experimental-test-module-mocks에 의존하며 이 기능은 Node 24에서만
       # 안정적이다. 여기서는 런타임이 선언한 지원 범위에서 실제로 뜨는지만 본다.
       - name: Module graph loads
-        run: node -e "import('./lib/tools/index.js').then(m => { if (m.getToolsDefinition(null).length < 18) process.exit(1); })"
+        run: node -e "import('./lib/tools/index.js').then(m => { if (m.getToolsDefinition(null, true).length < 18) process.exit(1); })"
       - name: Startup gate rejects missing key
         run: |
           set +e

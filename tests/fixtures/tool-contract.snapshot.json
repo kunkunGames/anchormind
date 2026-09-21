@@ -3,7 +3,8 @@
     "amend": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "assertionStatus": {
           "type": "string",
@@ -15,7 +16,8 @@
           ]
         },
         "content": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 4000
         },
         "dryRun": {
           "type": "boolean"
@@ -24,7 +26,8 @@
           "type": "string"
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "importance": {
           "type": "number"
@@ -77,7 +80,8 @@
     "batch_remember": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "async": {
           "type": "boolean"
@@ -88,10 +92,12 @@
             "type": "object",
             "properties": {
               "content": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 4000
               },
               "idempotencyKey": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 128
               },
               "importance": {
                 "type": "number"
@@ -152,9 +158,16 @@
     "context": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
         },
         "includeKeyName": {
+          "type": "boolean"
+        },
+        "includePeerAgents": {
           "type": "boolean"
         },
         "sessionId": {
@@ -181,7 +194,8 @@
     "forget": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "dryRun": {
           "type": "boolean"
@@ -201,13 +215,20 @@
     "fragment_history": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
         },
         "id": {
           "type": "string"
         },
         "includePeerAgents": {
           "type": "boolean"
+        },
+        "workspace": {
+          "type": "string"
         }
       },
       "required": [
@@ -225,9 +246,19 @@
     "graph_explore": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
+        },
+        "includePeerAgents": {
+          "type": "boolean"
         },
         "startId": {
+          "type": "string"
+        },
+        "workspace": {
           "type": "string"
         }
       },
@@ -238,7 +269,8 @@
     "link": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "dryRun": {
           "type": "boolean"
@@ -268,23 +300,15 @@
         "toId"
       ]
     },
-    "memory_consolidate": {
-      "properties": {
-        "stream": {
-          "type": "boolean"
-        }
-      },
-      "required": []
-    },
-    "memory_stats": {
-      "properties": {},
-      "required": []
-    },
     "recall": {
       "properties": {
         "affect": {},
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
         },
         "asOf": {
           "type": "string"
@@ -418,11 +442,21 @@
     },
     "reconstruct_history": {
       "properties": {
+        "agentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
+        },
         "caseId": {
           "type": "string"
         },
         "entity": {
           "type": "string"
+        },
+        "includePeerAgents": {
+          "type": "boolean"
         },
         "limit": {
           "type": "number"
@@ -465,7 +499,8 @@
           }
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "narrative_summary": {
           "type": "string"
@@ -553,7 +588,8 @@
           ]
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "assertionStatus": {
           "type": "string",
@@ -568,7 +604,8 @@
           "type": "string"
         },
         "content": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 4000
         },
         "contextSummary": {
           "type": "string"
@@ -580,7 +617,8 @@
           "type": "string"
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "importance": {
           "type": "number"
@@ -660,6 +698,13 @@
     },
     "search_traces": {
       "properties": {
+        "agentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
+        },
         "caseId": {
           "type": "string"
         },
@@ -677,6 +722,9 @@
         },
         "event_type": {
           "type": "string"
+        },
+        "includePeerAgents": {
+          "type": "boolean"
         },
         "keyword": {
           "type": "string"
@@ -710,7 +758,8 @@
     "session_rotate": {
       "properties": {
         "reason": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 256
         }
       },
       "required": []
@@ -727,7 +776,8 @@
           }
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "irrelevance_reason": {
           "type": "string",
@@ -776,7 +826,8 @@
     "amend": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "assertionStatus": {
           "type": "string",
@@ -788,7 +839,8 @@
           ]
         },
         "content": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 4000
         },
         "dryRun": {
           "type": "boolean"
@@ -797,7 +849,8 @@
           "type": "string"
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "importance": {
           "type": "number"
@@ -868,7 +921,8 @@
     "batch_remember": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "async": {
           "type": "boolean"
@@ -879,10 +933,12 @@
             "type": "object",
             "properties": {
               "content": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 4000
               },
               "idempotencyKey": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 128
               },
               "importance": {
                 "type": "number"
@@ -951,9 +1007,16 @@
     "context": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
         },
         "includeKeyName": {
+          "type": "boolean"
+        },
+        "includePeerAgents": {
           "type": "boolean"
         },
         "sessionId": {
@@ -980,7 +1043,8 @@
     "forget": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "dryRun": {
           "type": "boolean"
@@ -1000,13 +1064,20 @@
     "fragment_history": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
         },
         "id": {
           "type": "string"
         },
         "includePeerAgents": {
           "type": "boolean"
+        },
+        "workspace": {
+          "type": "string"
         }
       },
       "required": [
@@ -1024,9 +1095,19 @@
     "graph_explore": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
+        },
+        "includePeerAgents": {
+          "type": "boolean"
         },
         "startId": {
+          "type": "string"
+        },
+        "workspace": {
           "type": "string"
         }
       },
@@ -1037,7 +1118,8 @@
     "link": {
       "properties": {
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "dryRun": {
           "type": "boolean"
@@ -1083,7 +1165,11 @@
       "properties": {
         "affect": {},
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
         },
         "asOf": {
           "type": "string"
@@ -1217,11 +1303,21 @@
     },
     "reconstruct_history": {
       "properties": {
+        "agentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
+        },
         "caseId": {
           "type": "string"
         },
         "entity": {
           "type": "string"
+        },
+        "includePeerAgents": {
+          "type": "boolean"
         },
         "limit": {
           "type": "number"
@@ -1264,7 +1360,8 @@
           }
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "narrative_summary": {
           "type": "string"
@@ -1352,7 +1449,8 @@
           ]
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "assertionStatus": {
           "type": "string",
@@ -1367,7 +1465,8 @@
           "type": "string"
         },
         "content": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 4000
         },
         "contextSummary": {
           "type": "string"
@@ -1379,7 +1478,8 @@
           "type": "string"
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "importance": {
           "type": "number"
@@ -1459,6 +1559,13 @@
     },
     "search_traces": {
       "properties": {
+        "agentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "allWorkspaces": {
+          "type": "boolean"
+        },
         "caseId": {
           "type": "string"
         },
@@ -1476,6 +1583,9 @@
         },
         "event_type": {
           "type": "string"
+        },
+        "includePeerAgents": {
+          "type": "boolean"
         },
         "keyword": {
           "type": "string"
@@ -1509,7 +1619,8 @@
     "session_rotate": {
       "properties": {
         "reason": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 256
         }
       },
       "required": []
@@ -1526,7 +1637,8 @@
           }
         },
         "idempotencyKey": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 128
         },
         "irrelevance_reason": {
           "type": "string",
