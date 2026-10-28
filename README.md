@@ -246,6 +246,10 @@ RAG는 이미 있는 문서를 색인해 찾아 준다. AnchorMind는 에이전�
 
 주입된 기억은 시스템 프롬프트와 지침 파일보다 우선순위가 낮다. "PostgreSQL 15를 쓴다" 같은 사실은 잘 작동하지만, "테스트는 Given-When-Then으로 쓴다" 같은 행동 규칙은 충돌하면 무시될 수 있다. 짧게 말해, 행동 규칙은 `CLAUDE.md`, `AGENTS.md`, 훅, 스킬에 둔다.
 
+#### 기억에 답이 없을 때 에이전트가 알 수 있나?
+
+`recall` 응답의 `_meta.evidence.status`를 보면 된다. `no_evidence`면 찾은 기억이 없고, `partial`이면 질문의 핵심 낱말 일부가 결과에 없다(빠진 낱말은 `uncovered_terms`). 에이전트는 빠진 낱말로 다시 찾거나 "기억에 없다"고 답한다. "몇 번", "언제" 같은 질문에는 근거를 시간순으로 정리한 표와 주제별 시간선 요약이 함께 실린다.
+
 ### 데이터와 보안
 
 #### 내 기억은 어디에 저장되나?
@@ -276,7 +280,13 @@ RAG는 이미 있는 문서를 색인해 찾아 준다. AnchorMind는 에이전�
 
 #### 새 내용이 기존 내용과 모순되면?
 
-서버가 모순을 감지해 옛 파편을 만료시킨다(앵커는 제외). 그냥 지우지는 않는다. `valid_to`와 `superseded_by`로 이력을 남기며, 자세한 단계는 [Internals](docs/internals.md#모순-탐지-파이프라인)에 정리돼 있다.
+서버가 모순을 감지해 옛 파편을 만료시킨다(앵커는 제외). 그냥 지우지는 않는다. `valid_to`와 `superseded_by`로 이력을 남기며, 자세한 단계는 [Internals](docs/internals.md#모순-탐지-파이프라인)에 정리돼 있다. 어느 쪽이 최신인지는 그 말을 한 시각(`mentionTime`, 없으면 저장 시각)으로 정한다.
+
+예전 값이 필요하면 `recall`에 `includeHistory: true`를 준다. 현재 값 바로 뒤에 이전 값이 붙는다. 아직 어느 쪽도 정리되지 않은 모순은 결과에 `conflicts_with`로 표시된다.
+
+#### 언제 있었던 일인지도 기억하나?
+
+그 말을 한 시각과 그 일이 일어난 시각을 따로 둔다. `remember`에 `mentionTime`과 `eventTime`을 줄 수 있고, `eventTime`을 주지 않으면 본문의 "어제", "2026-03-14", "지난주" 같은 표현에서 읽어 낸다. 일어난 순서가 필요하면 `recall`에 `order: "chronological"`을, 사건 시각으로 기간을 거르려면 `timeRange: { from, to, basis: "event" }`를 쓴다.
 
 #### 확실하지 않은 내용은 어떻게 표시하나?
 
@@ -317,18 +327,21 @@ RAG는 이미 있는 문서를 색인해 찾아 준다. AnchorMind는 에이전�
 | `relation` | 엔티티 간 관계와 의존성 |
 | `episode` | 전후관계가 있는 서사(1000자, 나머지는 300자) |
 
-주요 도구는 `context`(세션 시작 시 핵심 기억 복원), `recall`(검색), `remember`(저장), `reflect`(세션 종료 시 요약 저장)다. 전체 도구와 사용 규칙은 [SKILL.md](SKILL.md), 기능 전체 목록은 [기능 상세](docs/capabilities.md)에 있다.
+주요 도구는 `context`(세션 시작 시 핵심 기억 복원), `recall`(검색), `remember`(저장), `reflect`(세션 종료 시 요약과 다른 작업에 옮겨 쓸 교훈 저장)다. 전체 도구와 사용 규칙은 [SKILL.md](SKILL.md), 기능 전체 목록은 [기능 상세](docs/capabilities.md)에 있다.
 
 ## 벤치마크
 
-[LongMemEval-S](https://arxiv.org/abs/2410.10813) 500문항 기준(2026-03-29 측정, 리더와 평가자 Gemini 2.5 Flash):
+[LongMemEval-S](https://arxiv.org/abs/2410.10813) 500문항 기준(2026-10-10 측정, 리더 deepseek-flash, 평가자 GPT-4o 공식 설정, MiniMax, Claude 소넷 5.5):
 
 | 지표 | 점수 | 조건 |
 |-|-|-|
-| 검색 recall_any@5 | 88.3% | text-embedding-3-small |
-| QA 정답률 | 44.9% | 시간 메타데이터와 답변 거부 감지 적용 |
+| 근거 턴 전체가 top-10에 든 비율 | 91.2% | bge-m3, 구간 검색 켬 |
+| 검색 recall_any@5 | 98.4% | 세션 단위 |
+| QA 정답률 (GPT-4o 공식 평가자) | 84.0% | 95% CI 80.5–87.0% |
+| QA 정답률 (MiniMax 평가) | 84.0% | 95% CI 80.5–87.0% |
+| QA 정답률 (Claude 평가) | 78.0% | 95% CI 74.2–81.4% |
 
-검색은 찾아 오지만, 찾은 파편에서 답을 합성하는 단계(여러 세션에 걸친 추론, 시간축 추론)에서 정답률이 떨어진다. 측정 조건과 분석은 [Benchmark Report](docs/benchmark.md).
+검색은 근거를 대부분 찾아 온다. 남은 오답은 여러 세션의 값을 합산하거나 날짜를 계산하는 질문(multi-session, temporal-reasoning)에 몰려 있다. 측정 조건과 분석은 [Benchmark Report](docs/benchmark.md).
 
 ## 문서
 

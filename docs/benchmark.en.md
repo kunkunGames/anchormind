@@ -2,7 +2,7 @@
 
 Based on [LongMemEval-S](https://arxiv.org/abs/2410.10813) benchmark. Full evaluation code: [longmemeval-memento](https://github.com/JinHo-von-Choi/longmemeval-memento)
 
-Date: 2026-03-29
+Date: 2026-10-10
 Evaluator: Jinho Choi
 
 ## Configuration
@@ -10,85 +10,102 @@ Evaluator: Jinho Choi
 | Parameter | Value |
 |-----------|-------|
 | Dataset | LongMemEval_S (500 questions, 6 types + abstention) |
-| Ingestion | round_direct (turn-pair verbatim, 300 char truncation) |
-| Storage | PostgreSQL bulk INSERT, pgvector embeddings via OpenAI text-embedding-3-small |
-| Retrieval | memento-mcp recall API (3-layer cascade: L1 Redis, L2 PostgreSQL GIN, L3 pgvector HNSW) |
-| Top-K | 5 |
-| Reader | Gemini 2.5 Flash (direct method, no chain-of-thought) |
-| Judge | Gemini 2.5 Flash (LongMemEval official prompts ported verbatim) |
-| Total fragments | 89,006 (all with embeddings) |
+| Ingestion | round_direct (turn-pair verbatim, 300 char truncation). Each question gets its own topic with about 620 fragments, deleted after the query |
+| Embedding | bge-m3 (CLS pooling, fp32, 1024 dimensions) |
+| Retrieval | memento-mcp recall API (L1 keyword, L2 GIN, L2.5 graph, L3 semantic, segment search, RRF merge, lexical weighting) |
+| Top-K | 10, token budget 20000 |
+| Reader | deepseek-flash (direct method, no chain-of-thought) |
+| Judges | gpt-4o-2024-08-06 (LongMemEval official judge setting: temperature 0, max_tokens 10), MiniMax-M3.1-Flash-Preview and claude-sonnet-5-5, all with the LongMemEval official prompts verbatim |
+| Segment search | on (`MEMENTO_SEGMENT_EMBEDDING_ENABLED=true`, `MEMENTO_SEGMENT_SEARCH=true`) |
+| Rank-before-budget | off (search-order cut, `MEMENTO_RANK_BEFORE_BUDGET=off` up to 6.5.2) |
+
+Before each query the run waits until both body embeddings and segment embeddings of that question's fragments exist. Accuracy is counted over all 500 questions with no final failures (ITT).
 
 ## Retrieval Performance
 
 | Metric | Score |
 |--------|-------|
-| recall_any@5 | 0.883 |
-| recall_all@5 | 0.649 |
+| recall_any@5 (session) | 0.984 |
+| recall_all@5 (session) | 0.816 |
+| All evidence turns within top-5 | 0.878 |
+| All evidence turns within top-10 | 0.912 |
+| All evidence turns within top-20 | 0.944 |
+| recall latency (median / p95) | 0.5 s / 1.1 s |
 
-### Per-Type Retrieval (recall_any@5)
+Session-level recall counts a hit when any gold session is found, so it reads high. The "all evidence turns" metrics show whether everything needed to build the answer arrived.
 
-| Question Type | n | recall_any@5 |
-|--------------|---|-------------|
-| multi-session | 121 | 0.983 |
-| knowledge-update | 72 | 0.972 |
-| single-session-user | 64 | 0.953 |
-| temporal-reasoning | 127 | 0.874 |
-| single-session-preference | 30 | 0.800 |
-| single-session-assistant | 56 | 0.536 |
+### Per-Type Retrieval
 
-### Search Path Distribution
+| Question type | n | recall_any@5 | recall_all@5 | All evidence in top-10 |
+|---------------|---|--------------|--------------|------------------------|
+| single-session-assistant | 56 | 1.000 | 1.000 | 1.000 |
+| temporal-reasoning | 133 | 0.985 | 0.722 | 0.940 |
+| multi-session | 133 | 1.000 | 0.662 | 0.917 |
+| single-session-user | 70 | 0.986 | 0.986 | 0.886 |
+| knowledge-update | 78 | 0.987 | 0.936 | 0.885 |
+| single-session-preference | 30 | 0.867 | 0.867 | 0.733 |
 
-| Layer | Hit Rate |
-|-------|----------|
-| L1 (Redis keyword) | 0.0% |
-| L2 (PostgreSQL GIN) | 0.0% |
-| L3 (pgvector semantic) | 99.0% |
-| RRF fusion | 100.0% |
+### Search Path
 
-L1 and L2 show 0% because round_direct ingestion stores session IDs and dates as keywords, not content terms. The 3-layer cascade correctly falls through to L3 semantic search, which handles 99% of queries.
+Every question ran L1, L2, L3, segment search, RRF merge and lexical weighting; L2.5 graph ran on 498 questions. Example search path record: `L1:621 → L2:621 → L2.5Graph:10 → L3:30 → Seg → RRF → Lexical:170`.
 
 ## QA Accuracy
 
-| Metric | Score |
-|--------|-------|
-| Overall accuracy | 0.404 |
-| Task-averaged accuracy | 0.434 |
-| Abstention accuracy | 0.467 |
+| Metric | GPT-4o (official) | MiniMax | Claude |
+|--------|-------------------|---------|--------|
+| Overall accuracy (ITT) | 0.840 (420/500, 95% CI 0.805-0.870) | 0.840 (420/500, 95% CI 0.805-0.870) | 0.780 (390/500, 95% CI 0.742-0.814) |
+| Task-averaged accuracy | 0.868 | 0.866 | 0.769 |
+| Abstention accuracy | 0.767 (23/30) | 0.767 (23/30) | 0.667 (20/30) |
+
+The official judge (GPT-4o) and MiniMax agree on 492 of 500 questions (kappa 0.940). The 8 disagreements split 4 and 4, so the totals are equal. Claude agrees with GPT-4o on 468 questions (kappa 0.793); 31 of its 32 disagreements are questions only GPT-4o marked correct, which makes Claude the strictest judge, especially on single-session-preference.
 
 ### Per-Type QA Accuracy
 
-| Question Type | n | Accuracy | Retrieval | Gap |
-|--------------|---|----------|-----------|-----|
-| single-session-user | 64 | 0.797 | 0.953 | 0.156 |
-| knowledge-update | 72 | 0.583 | 0.972 | 0.389 |
-| single-session-preference | 30 | 0.467 | 0.800 | 0.333 |
-| multi-session | 121 | 0.347 | 0.983 | 0.636 |
-| temporal-reasoning | 127 | 0.252 | 0.874 | 0.622 |
-| single-session-assistant | 56 | 0.161 | 0.536 | 0.375 |
+| Question type | n | GPT-4o (official) | MiniMax | Claude | All evidence in top-10 | Gap (GPT-4o) |
+|---------------|---|-------------------|---------|--------|------------------------|--------------|
+| single-session-assistant | 56 | 1.000 | 1.000 | 0.911 | 1.000 | 0.000 |
+| single-session-user | 70 | 0.971 | 0.971 | 0.943 | 0.886 | -0.085 |
+| knowledge-update | 78 | 0.885 | 0.859 | 0.833 | 0.885 | 0.000 |
+| single-session-preference | 30 | 0.833 | 0.833 | 0.467 | 0.733 | -0.100 |
+| temporal-reasoning | 133 | 0.812 | 0.820 | 0.789 | 0.940 | 0.128 |
+| multi-session | 133 | 0.707 | 0.714 | 0.669 | 0.917 | 0.210 |
 
-Gap = retrieval recall - QA accuracy. Large gaps indicate the reader fails to extract the answer even when the correct session is retrieved.
+Gap = share of questions with all evidence in top-10 minus GPT-4o accuracy. A larger gap means the evidence was retrieved but the reader failed to produce the answer. A negative gap means some questions were answered correctly without all evidence.
+
+### Segment Search On vs Off
+
+Paired comparison on the same 499 questions.
+
+| Metric | Segment search off | Segment search on |
+|--------|--------------------|-------------------|
+| Accuracy (GPT-4o, official) | 391/499 (0.784) | 420/499 (0.842) |
+| Accuracy (MiniMax) | 387/499 (0.776) | 420/499 (0.842) |
+| Accuracy (Claude) | 363/499 (0.727) | 390/499 (0.782) |
+| All evidence in top-5 | 408/499 | 439/499 |
+| All evidence in top-10 | 442/499 | 455/499 |
+| recall latency (median / p95) | 0.63 s / 2.7 s | 0.5 s / 1.1 s |
+
+With the official judge (GPT-4o), 39 questions are correct only with segment search on and 10 only with it off (sign test p = 3.8e-5). With MiniMax, 43 questions are correct only with segment search on and 10 only with it off (sign test p = 5.6e-6). With Claude the counts are 47 and 20 (p = 0.0013). The two runs differ in more than segment search: the embedding path and the wait for segment embeddings also differ. The accuracy gain is larger than the gain in evidence retrieval, so part of it may come from ordering changes inside the top-10 or from reader and judge variance.
+
+By type, correct answers rose from 94 to 108 on temporal-reasoning, from 84 to 94 on multi-session and from 21 to 25 on single-session-preference (GPT-4o). single-session-assistant stays at 56 with GPT-4o and drops from 54 to 51 with Claude.
 
 ## Analysis
 
 ### Retrieval Strengths
 
-AnchorMind's pgvector semantic search recorded 88.3% recall_any@5 across all question types. The retrieval table in the LongMemEval paper (Table 3) uses LongMemEval_M with about 500 sessions per question (Stella V5 1.5B base design: session R@5 0.706, round R@5 0.582), so it is not directly comparable with this LongMemEval_S result. Retrieval here is served by fragment-level storage with OpenAI embeddings and pgvector.
-
-Multi-session (98.3%) and knowledge-update (97.2%) retrieval is near-perfect, indicating that AnchorMind handles cross-session information distribution and temporal updates well at the retrieval level.
+Session-level recall_any@5 is 0.984 and all evidence turns land in the top-10 for 0.912 of the questions. single-session-assistant always has all evidence in the top-10, and temporal-reasoning and multi-session reach 0.92-0.94. Segment search covers cases where the evidence sentence is buried in a long body (see the on/off comparison below).
 
 ### Retrieval Weaknesses
 
-single-session-assistant (53.6%) is the weakest retrieval category. The round_direct strategy stores "User: X / Assistant: Y" pairs, but queries about assistant utterances may not match well against this format since the query semantics differ from the stored format.
+single-session-preference has the lowest share of questions with all evidence in the top-10 (0.733). multi-session has recall_all@5 of 0.662, so evidence spread over several sessions is not fully collected in the top 5. Evidence turns fall outside the top-10 in 44 of 500 questions.
 
 ### QA Gap Analysis
 
-The largest retrieval-to-QA gaps are in multi-session (63.6pp) and temporal-reasoning (62.2pp). These require synthesizing information across multiple retrieved fragments or reasoning about time -- capabilities that depend on the reader LLM rather than retrieval quality.
-
-single-session-user has the smallest gap (15.6pp), confirming that when a direct factual answer exists in a single retrieved fragment, the reader successfully extracts it.
+The largest gaps are multi-session (0.210) and temporal-reasoning (0.128). Most evidence arrives, but the reader mostly fails when it has to sum values across fragments or compute dates. Better retrieval alone does not shrink this part.
 
 ### Abstention
 
-46.7% abstention accuracy is moderate. The system struggles to distinguish between "information not in history" and "information not retrieved" -- a fundamental challenge for retrieval-augmented systems.
+Abstention accuracy is 0.767 (23/30) with GPT-4o and MiniMax and 0.667 (20/30) with Claude. With 30 questions the confidence interval is wide.
 
 ## Ablation Study
 
@@ -188,6 +205,55 @@ Standalone measurement of the tokenization step in `lib/memory/embedding/Morphem
 - `results/evaluation_round_direct_k5_improved.jsonl` -- improved (temporal + abstention) evaluation
 - `results/evaluation_round_direct_k5_conv2.jsonl` -- CoN v2 evaluation
 - `results/judge_calibration.jsonl` -- Gemini vs GPT-4o calibration data
+
+## LoCoMo
+
+10 conversations, 1,986 questions. Each dialog turn is stored as one fragment, and for each question the k most similar fragments are retrieved and used to answer. The answering model is deepseek-flash.
+
+| Fragments retrieved (k) | 10 | 20 | 50 |
+|---|---|---|---|
+| Accuracy (graded by MiniMax) | 0.805 | 0.840 | 0.863 |
+| Accuracy (graded by Claude) | 0.782 | 0.825 | 0.840 |
+| Official F1 | 0.605 | 0.630 | 0.633 |
+| Share with the evidence retrieved | 0.639 | 0.719 | 0.773 |
+
+Accuracy covers the 1,540 questions other than adversarial. At k=50, accuracy by category (MiniMax) is single-hop 0.891, temporal 0.882, multi-hop 0.826 and open-domain 0.667.
+
+- More fragments help, but F1 barely rises after k=20.
+- Even at k=50, 23% of the evidence is not retrieved.
+- Adversarial questions, which have no answer, score lower as k grows (0.928 to 0.881).
+- Scores published by other systems use a different answering model, grading model and number of retrieved fragments, so they cannot be compared directly.
+
+## MemBench
+
+A benchmark that answers four-option questions from memory. Conversation or observation records are stored step by step, and for each question 10 fragments are retrieved to answer. 469 questions (one question the answering model could not answer is excluded). The answering model is deepseek-flash.
+
+**Accuracy 0.859** (95% interval 0.825-0.888). Random guessing is 0.25.
+
+| Question type | Accuracy |
+|---|---|
+| Single-session assistant (30 questions) | 1.00 |
+| Single-hop (70) | 0.99 |
+| Comparative (50) | 0.94 |
+| Multi-hop (69) | 0.87 |
+| Aggregative (50) | 0.60 |
+
+- Questions that need one or two records are almost always right.
+- Aggregative and multi-hop questions, which need records gathered from many places, are weaker. The needed records do not all fit in the top 10.
+
+## BEAM
+
+20 long conversations (100K tokens), 400 questions. Conversations are stored as pairs, and for each question 24 fragments are retrieved to answer. The answering model is deepseek-flash. The official grading model is not available, so MiniMax and Claude each graded the answers.
+
+| Grading model | Overall score |
+|---|---|
+| MiniMax | 0.50 |
+| Claude | 0.44 |
+
+- Strong abilities: preference following (0.71-0.80), information extraction (0.71-0.74).
+- Weak abilities: contradiction resolution (0.16-0.23), event ordering (0.18-0.25), summarization (0.30-0.40).
+- Raising the fragments from 24 to 50 does not raise the score.
+- The grading model is not the official one, so scores cannot be compared directly with the paper.
 
 ## Offline goldset measurement (2026-08-28)
 
@@ -369,28 +435,6 @@ In the output JSON, `metrics`, `rows`, `coverage` and `labels` hold the same val
 ```bash
 node scripts/measure/recall-metrics.mjs --compare run-a.json run-b.json --out compare.json
 ```
-
-### Rank-before-budget comparison (`MEMENTO_RANK_BEFORE_BUDGET`)
-
-Compares recall budget selection (`MEMENTO_RANK_BEFORE_BUDGET=on`) with the search-order cut (`off`) on the same set under the same conditions. The switch is read at call time, so it is set through the environment of each run, and the applied value is recorded in `params.rank_before_budget` of the metric JSON. When the budget does not bind, both paths return the same result, so keep `--token-budget` at or below the recall default 1000 and use the same value in both runs. To include the effect of selecting linked fragments within the budget, pass `--include-links on` to both runs. The real run needs a restored database and embeddings (`--embeddings on`) and is an owner step; the procedure below has not been measured yet.
-
-```bash
-# 1. Baseline run on fresh restore A (search-order cut)
-MEMENTO_RANK_BEFORE_BUDGET=off node scripts/measure/recall-metrics.mjs \
-  --target localhost:35433/<restore_a> --embeddings on --token-budget 1000 --include-links on --out budget-off.json
-
-# 2. Candidate run on fresh restore B (rank before budget)
-MEMENTO_RANK_BEFORE_BUDGET=on node scripts/measure/recall-metrics.mjs \
-  --target localhost:35433/<restore_b> --embeddings on --token-budget 1000 --include-links on --out budget-on.json
-
-# 3. Paired bootstrap comparison of the budgeted nDCG only
-node scripts/measure/recall-metrics.mjs --compare budget-off.json budget-on.json --metric ndcg_at_budget --out budget-compare.json
-```
-
-- `--metric ndcg_at_budget` keeps only that metric in the comparison output. The interval values are the same as when all metrics are compared.
-- Reading: the budgeted nDCG improved when the `comparisons` entry with `group` `overall` has `ci_low` above 0 and `insufficient_n` false. Subset, tag and domain groups are read with the same rule.
-- When `warnings` lists a difference in `token_budget`, `query_keywords` or `include_links`, the runs were made under different conditions and are not compared.
-- With migration 051 applied to the restored copy (`DATABASE_URL=postgresql://<user>:<password>@localhost:35433/<restore_b> npm run migrate`; set `DATABASE_URL` explicitly so that no connection value from another settings file is used), `search_events.candidate_count` and `budget_kept` of the candidate run show the share of recalls where the budget bound (`SELECT count(*) FILTER (WHERE budget_kept < candidate_count), count(*) FROM agent_memory.search_events WHERE candidate_count IS NOT NULL`). Without it, recall and the metrics are the same and search events are recorded without the two columns.
 
 ### Context injection line annotation tokens (`MEMENTO_CONTEXT_ANNOTATE`)
 

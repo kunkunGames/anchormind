@@ -2,6 +2,252 @@
 
 ## [Unreleased]
 
+## [6.8.1] - 2026-10-28
+
+### Fixed
+
+- `recall`의 caseMode가 응답 한 쪽(`pageSize`, `tokenBudget`으로 자른 파편)만 case_id로 묶어, 조건에 맞는 사례가 더 있어도 `maxCases`보다 적게 돌려주던 문제를 고쳤다. 사례는 조건에 맞는 검색 결과 전체에서 센다.
+
+## [6.8.0] - 2026-10-28
+
+### Added
+
+- 관리 콘솔에 검토 대기(승인, 거절, 앵커 적용), 모순 처리(남길 쪽 선택, 보류), 검색 진단(키 범위 검색, 검색 이벤트 확인과 재실행·피드백, 시점 조회) 메뉴가 생겼다.
+- 관리 콘솔 개요에 운영 상태 패널(스케줄러 작업의 마지막 성공과 실패, 마지막 통합 실행, 기능 스위치 요약)이 생겼다.
+- 관리 콘솔 메모리 운영에 가져오기(IMPORT, 시험 실행 기본)와 파편 변경 이력 보기가 생겼다. 키 상세에서 default workspace를 바꿀 수 있고, 관리자 계정 화면에서 권한 판정 근거를 확인할 수 있다.
+- 관리 콘솔의 현재 메뉴와 조회 조건이 주소(`#/메뉴?조건`)에 남는다. 새로고침과 뒤로 가기, 주소 공유가 보던 화면을 유지한다.
+- `GET /memory/conflicts`가 `status=open`(해소 기록이 없고 두 파편이 모두 유효한 모순)을 받는다.
+
+### Changed
+
+- `GET /memory/anomalies`가 `possibleSupersessions` 대신 `openConflicts`(미해결 모순 수)를 돌려준다. `failedSearchCount`(7일 동안 결과 0건 검색 수), `failedSearchDays`, `staleDays`가 더해졌다.
+- `GET /stats`의 `pathPerformance`는 계층별 결과 건수를 지운 검색 경로로 묶은 상위 20개다.
+- 관리 콘솔 개요와 메트릭의 자동 갱신(30초)에 마지막 갱신 시각과 일시정지 단추가 생겼다. 개요와 메모리 운영은 패널마다 따로 불러와 먼저 온 것부터 그린다.
+- 관리 콘솔 지식 그래프의 노드 수 슬라이더는 10~1000, 기본 200이다. `/memory/graph`는 노드 본문을 DB에서 300자로 잘라 읽는다.
+
+### Fixed
+
+- 관리 콘솔에서 메트릭 메뉴를 한 번 연 뒤 다른 메뉴로 옮기면 30초마다(또는 탭으로 돌아올 때) 화면이 메트릭으로 바뀌던 문제를 고쳤다. 화면을 떠날 때 자동 갱신, 그래프 애니메이션, 진행 중인 요청을 멈춘다.
+- 관리 콘솔에서 응답이 느린 화면을 기다리는 사이 다른 메뉴로 옮기면 늦게 온 응답이 새 화면을 덮던 문제를 고쳤다.
+- `GET /stats`가 쓰이지 않는 경로 통계 수만 행을 실어 응답이 수 MB가 되던 문제와, 파편 개수를 다섯 번 따로 세던 문제를 고쳤다. 파편 개수는 한 문장으로 센다.
+- `GET /memory/anomalies`가 대체 후보 수를 세려고 수십만 행을 서버로 가져오던 문제를 고쳤다. 개수는 모두 SQL에서 센다.
+- 관리 콘솔 "결과 0건 검색 (7일)" 카드가 최근 10건까지만 세던 문제를 고쳤다.
+- 관리 콘솔의 파편 내보내기와 감사 기록 내보내기가 관리자 계정 로그인에서도 동작한다.
+- 관리 콘솔 개요의 빠른 작업에서 아무 동작이 없던 단추를 검토 대기 이동으로 바꿨다.
+- `recall` 응답에 `totalCount`, `nextCursor`, `hasMore`가 실린다. 기본 응답과 `format: "pack"` 응답 모두 해당하고 caseMode 응답은 제외다.
+- `recall`의 `tokenBudget`이 페이지마다 적용된다. 예산에 들지 못한 결과는 버려지지 않고 `nextCursor`로 다음 페이지에서 이어 받는다. 혼자서도 예산을 넘는 파편은 결과와 `totalCount`에서 빠진다.
+- `recall`의 `nextCursor`는 이미 돌려준 파편의 해시 표지를 담는다. 호출 사이에 검색 후보가 달라져도(보조 검색 시간 초과 등) 앞 페이지 파편이 다시 오지 않는다. 기존 offset 커서도 읽는다.
+- `recall`의 `threshold`, `depth`, `excludeSeen` 조건이 예산 선택 전에 적용된다. 응답에서 빠질 파편이 예산과 페이지 위치를 차지하지 않고 접근 기록도 남기지 않는다.
+
+## [6.7.1] - 2026-10-22
+
+### Changed
+
+- **대체 관계 탐지(`detect_supersessions`).** 매 주기 같은 topic·type·key의 모든 파편 쌍을 SQL self-join으로 비교하던 방식에서, 워터마크 이후 새 파편만 오래된 순으로 한 주기에 최대 1000개 보고 파편마다 가까운 이웃 20개 중 유사도 0.7~0.85 구간의 링크 없는 파편을 후보로 모으는 방식으로 바뀐다. LLM 판정은 이전과 같이 유사도가 높은 10쌍까지다. 워터마크는 Redis `frag:supersession_check_at`에 두고, 처음에는 최근 24시간부터 본다.
+
+### Fixed
+
+- 교훈 cue 등록이 질의 시간 초과처럼 예외로 끝나면 2초, 10초 뒤에 다시 시도한다. 파편이 없거나 본문이 바뀐 경우는 다시 시도하지 않는다.
+
+## [6.7.0] - 2026-10-22
+
+### 업그레이드 주의
+
+- migration-068(`fragment_synthetic_query.origin`), migration-069(`embedding_profile`)을 적용한다. 첫 기동이 현재 임베딩 설정을 `embedding_profile`에 기록한다.
+- `MEMENTO_CASE_BACKPROP_ENABLED=true`인 설치는 검증 보상 대상이 바뀐다. 사례 전체 근거가 아니라 그 검증 이벤트의 근거만 보상받는다.
+- migration-070이 `morpheme_dict`의 HNSW 색인을 지운다. 잠금을 5초 안에 못 잡으면 실패하고 적용 이력에 남지 않으므로 다시 실행한다. 형태소 벡터를 거리로 찾는 질의를 따로 붙였다면 색인을 직접 다시 만든다.
+- consolidate 기본 간격이 6시간에서 8시간으로 바뀐다. 이전 간격을 쓰려면 `CONSOLIDATE_INTERVAL_MS=21600000`을 둔다. 주기마다 적용되는 피드백 중요도 보정과 주기당 만료 삭제 상한(`MEMENTO_GC_MAX_DELETE_PER_CYCLE`)의 하루 적용 횟수가 4회에서 3회로 준다.
+
+### Added
+
+- **reflect `lessons`.** 교훈을 `{cue, lesson, evidence, confidence}`로 받는다. 셋 중 하나라도 비면 저장하지 않고, 근거가 없으면 `NO_ENTRY`를 넣는다. 교훈은 procedure 파편으로, cue는 역질의 표의 `origin='cue'` 행으로 저장되어 상황을 묻는 recall `text` 질의가 교훈을 찾는다. cue 행은 본문을 고쳐도 남고, 역질의 백필은 cue 행만 있는 파편도 역질의 생성 대상으로 고른다.
+- **context `view: "index"`.** 파편마다 첫 문장 60자만 담은 목록으로 고르고 주입한다. 토큰 예산을 목록 줄 길이로 세고, 목록으로만 본 파편은 이미 본 파편으로 표시하지 않는다.
+- **context 앵커 토큰 예산.** `MEMENTO_CONTEXT_ANCHOR_TOKEN_BUDGET`(기본 1000). context 응답 `budget.anchor`에 앵커 사용량과 내릴 후보를 싣고, 예산을 넘기는 앵커 지정은 `MEMENTO_ANCHOR_TOKEN_BUDGET_MODE`(warn 기본, reject, off)에 따라 `anchorContextBudgetExceeded` 경고를 싣거나 앵커 지정을 거둔다. memory_stats의 workspace 분포에 앵커 수와 앵커 토큰 합을 싣는다.
+- **다른 작업 공간 fact 표시.** master의 allWorkspaces 조회에서 적용 대상 workspace와 다른 workspace의 fact에 `workspace_warning`을 단다(recall, pack, context).
+- **임베딩 프로파일.** 기동 검사가 저장된 임베딩의 제공자와 모델을 현재 설정과 비교해, 차원이 같은 다른 모델로 바뀌었으면 재임베딩이 필요하다고 경고한다. `node scripts/check-embedding-consistency.js --record`로 프로파일을 갱신한다.
+- reflect가 `MEMENTO_REFLECT_SLOW_LOG_MS`(기본 5000) 이상 걸리거나 실패하면 단계별 소요 시간을 한 줄로 남긴다.
+- consolidate 주기 종료 로그에 가장 오래 걸린 단계 다섯 개의 소요 시간을 싣는다.
+
+### Changed
+
+- **semantic_dedup.** 파편마다 KNN 질의를 보내던 방식에서, topic·workspace·key_id 묶음 벡터를 한 번 읽어 모든 쌍의 코사인을 메모리에서 계산하는 방식으로 바뀐다. 파편마다 정확 top-3 이웃 가운데 cosine 0.92 이상 쌍을 게이트를 거쳐 병합한다. 근사 색인이 놓치던 이웃도 후보가 된다. 생존자는 `(created_at, id)`가 큰 쪽이다. 단계 시간이 `DEDUP_TIME_BUDGET_MS`(기본 20분)를 넘으면 남은 topic은 다음 주기에 본다. 게이트 차단은 쌍마다 경고를 남기지 않고 단계 끝에 사유별 건수 한 줄로 남긴다(표본은 debug).
+- **reflect 교훈 cue 등록.** cue 역질의 행 등록이 reflect 응답을 기다리게 하지 않는다. 등록은 응답 뒤에 이어지고, 실패는 이전과 같이 경고로 남는다.
+- **consolidate 기본 간격** 8시간(`CONSOLIDATE_INTERVAL_MS=28800000`).
+- `post-migrate-flexible-embedding-dims.js`가 `morpheme_dict`에 HNSW 색인을 만들지 않는다.
+
+### Fixed
+
+- `oneOf` 인자 검증 오류가 값과 타입이 맞는 형식의 위반 사유를 함께 싣는다. 예: `lessons[0]: matches none of the allowed forms (got object): lessons[0].confidence: must be one of high|medium|low`. 판정은 바뀌지 않는다.
+- 종료 시 reflect가 응답 뒤에 남긴 형태소·cue 등록도 기다린다. 세션 auto-reflect가 끝난 뒤 한 번 더 기다린 다음 연결을 닫는다.
+- 교훈 cue 등록이 파편을 찾지 못하거나, 임베딩을 얻지 못하거나, 저장 직전에 본문이 바뀌어 건너뛰면 경고를 남긴다.
+- 검증 보상이 사례의 모든 근거 파편을 검증할 때마다 다시 올려 누적되던 문제. 보상은 그 검증 이벤트에 연결된 `supports`, `produced_by` 근거에만 delta x confidence로 가고, `contradicts` 근거는 보상하지 않는다. confidence 0.5 이하 근거(검증 전 추론 파편이 낸 근거)는 `quality_verified`를 받지 않는다.
+- 사례 이벤트의 근거를 이벤트와 같은 트랜잭션에 기록한다. 검증 보상이 근거 기록보다 먼저 돌 수 있던 경합이 없어진다.
+- 모순과 대체 관계 판정에서 LLM에 넘기는 두 파편의 순서를 쌍 해시로 정한다. id가 작은 쪽이나 새 파편이 늘 A로 가던 순서 편향이 없어진다.
+- reflect 일괄 저장 경로가 파편의 `context_summary`를 저장 관문에 넘긴다.
+- 역질의(생성 역질의와 교훈 cue) 히트가 본문 경로로 이미 찾은 파편에는 반영되지 않던 문제. 보조 유사도(감쇠 후)가 본문 유사도보다 높으면 그 값으로 순위를 올리고, 순위를 바꾸는 보조 히트 수는 기존 채택 상한(`adoptLimit`)을 따른다.
+- 파편 쓰기 경로의 토큰 수 대체 계산이 `chars/4` 대신 저장과 같은 토크나이저를 쓴다.
+
+## [6.6.3] - 2026-10-20
+
+### Fixed
+
+- 민감정보 규칙 `phone_kr`, `card_number`, `rrn_kr`, `api_key_legacy`, `anthropic_key`, `openai_project_key`, `github_token`, `slack_token`이 영문자나 숫자에 붙은 부분 문자열에는 일치하지 않는다 (#97). 해시·다이제스트·base64·타임스탬프 안의 숫자열이 `[REDACTED_PHONE]`, `[REDACTED_CARD]` 등으로 바뀌지 않는다. 영문자나 숫자에 붙여 쓴 전화번호는 가리지 않는다.
+
+### Security
+
+- 로그 메시지와 오류 메시지의 줄바꿈과 제어 문자를 이스케이프한다.
+- 파편 식별자 추출 정규식의 역추적 폭증을 없앴다.
+- 관리 화면이 마스터 키를 sessionStorage에 저장하지 않는다. 마스터 키로 들어온 화면은 새로고침하면 다시 로그인한다.
+- 감사 로그 `actionPrefix` 필터가 LIKE 특수 문자(`%`, `_`, `\`)를 문자 그대로 비교한다.
+- init의 기존 파일 검사가 심볼릭 링크를 따르지 않고 연 파일을 읽는다.
+
+## [6.6.2] - 2026-10-14
+
+### Fixed
+
+- 관리 API 파편 수정·삭제 거절 경고 로그에 파편 id, 응답 상태, code, 사유를 함께 남긴다.
+
+## [6.6.1] - 2026-10-14
+
+### Fixed
+
+- 관리 API `DELETE /memory/fragments/:id`가 `force=true`를 받아 permanent 파편도 지운다. permanent 보호로 지우지 못하면 200 대신 409와 `code: "permanent_protected"`로 응답한다.
+- 관리 API `PATCH /memory/fragments/:id`가 본문이 다른 파편과 겹쳐 병합되면 409와 `code: "duplicate_content"`, `existingId`로 응답한다. 거절 응답에 amend의 `code`를 싣는다.
+- 관리 API의 파편 수정·삭제 거절을 경고 로그로 남긴다.
+
+## [6.6.0] - 2026-10-13
+
+### 업그레이드 주의
+
+- `MEMENTO_RANK_BEFORE_BUDGET`, `MEMENTO_RANKING_FIX_V2`를 없앴다. 두 값을 `off`로 쓰던 설치는 recall 순위가 기본 동작으로 바뀐다.
+
+### Removed
+
+- recall의 검색 순서 절단 경로와 RRF 마지막 값 우선 병합 경로.
+
+## [6.5.2] - 2026-10-13
+
+### Fixed
+
+- recall 연결 파편 조회가 검색·미리보기와 같은 에이전트 조건을 쓴다. 마스터 키의 `includePeerAgents` 조회에서도 귀속 에이전트가 없는 파편은 연결 파편으로 나오지 않는다.
+
+## [6.5.1] - 2026-10-13
+
+### Added
+
+- **workspace 누락 경고.** `remember`, `batch_remember`, `reflect`가 인자에도 키의 `default_workspace`에도 workspace 없이 오면 응답 `_meta.warnings`에 `workspace_missing`을 싣는다. 이런 파편은 전역으로 저장되어 모든 workspace의 recall에 나온다. `MEMENTO_MISSING_WORKSPACE`(`warn` 기본, `reject`, `allow`)로 거부하거나 끌 수 있다.
+- recall 결과의 연결 파편에 `source: "linked"`와 출발 파편 `linked_from`이 붙어 검색 결과와 구분된다.
+- `scripts/backfill-reflect-workspace.js`가 topic이 실존 workspace 이름과 같은 파편도 그 workspace로 옮기고, `--exclude=a,b`로 후보에서 뺄 이름을 받는다.
+- `scripts/normalize-feedback-tool-names.js`: 저장된 `tool_feedback.tool_name`을 정규화한다(기본 미리보기, `--execute`로 적용).
+
+### Fixed
+
+- recall의 `type`, `topic`, `caseId`, `resolutionStatus`, `phase`, `affect`, `minImportance` 조건이 1-hop 연결 파편에도 적용된다. 조건은 연결 조회 SQL 안에서 걸려 연결 파편 수 제한이 조건을 통과한 파편에만 쓰인다.
+- 같은 키 그룹의 다른 키가 저장한 파편을 `amend`하면 `"Update failed"` 대신 `code: "not_owner"`와 이유를 돌려준다.
+- `tool_feedback`이 `mcp__<서버>__recall`, `anchormind-recall` 같은 클라이언트 표기를 도구 이름(`recall`)으로 저장한다. 다른 서버 도구 이름은 MCP 접두어만 뗀다.
+- `tool_feedback`의 `search_event_id`가 숫자 문자열도 받는다.
+- 종료할 때 DB 풀이 반환되지 않는 연결을 최대 5초만 기다린다. 이전에는 `MEMENTO_SHUTDOWN_DEADLINE_MS`(60초)까지 멈춰 있다가 강제 종료되어, 재시작마다 그동안 요청을 받지 못했다.
+
+## [6.5.0] - 2026-10-12
+
+키가 실제로 기억 도구를 쓰는지 따로 볼 수 있고, Codex에서 기억 도구를 쓰게 하는 설정을 안내한다.
+
+### 업그레이드 주의
+
+- 마이그레이션 `migration-067`(`api_key_usage`에 도구 호출 수 열)이 들어 있다. `npm run migrate`를 실행한다.
+
+### Added
+
+- **도구 호출 수.** 키별로 그날 실제로 부른 도구 수와 도구별 수를 센다. 기존 요청 수(`call_count`)는 접속과 도구 목록 조회까지 세서 실제 사용량보다 크게 보였다. 관리 API `/keys/:id/stats`의 `usage`와 `/stats`의 `toolCallsToday`, 관리 콘솔 개요의 "오늘 도구 호출" 카드에서 본다.
+
+### Fixed
+
+- 링크 생성 트랜잭션의 `search_path`가 고정된 스키마 이름 대신 `PGVECTOR_SCHEMA` 설정 또는 시작 시 감지한 pgvector 스키마를 쓴다.
+- workspace 백필 스크립트(`backfill-reflect-workspace.js`, `backfill-workspace-inference.js`)의 제외 목록은 `default`, `batch`와 시험용 이름만 둔다.
+
+### Docs
+
+- Codex 연결 안내에 기억 도구를 쓰게 하는 `AGENTS.md` 지침과 훅 설정을 추가했다. Codex는 MCP 도구를 모델에 바로 보여 주지 않아, 연결만 하면 도구를 부르지 않는다.
+
+## [6.4.0] - 2026-10-12
+
+기억이 "언제" 일어난 일인지 구분하고, recall이 답의 근거가 충분한지 알려 준다.
+
+### 업그레이드 주의
+
+- 마이그레이션 두 개가 들어 있다: `migration-065`(파편 시각 열), `migration-066`(요약 표). 먼저 백업하고(`scripts/ops/backup.sh --label pre-migration`) `npm run migrate`를 실행한다. 기존 파편은 그대로 동작한다.
+- `migration-065`는 색인 `idx_fragments_world_time`도 만들며, 만드는 동안 파편 쓰기가 잠시 멈춘다. 파편이 많아 이를 피하려면 migration-065의 `ALTER TABLE` 문을 먼저 실행하고, `scripts/ops/online-index.mjs`(또는 `CREATE INDEX CONCURRENTLY`)로 색인을 만든 뒤 `npm run migrate`를 실행한다.
+- 시간 근접 랭킹과 모순 판정(어느 쪽이 최신인가)이 저장 시각 대신 "말한 시각"을 본다. `mentionTime` 없이 저장된 파편은 둘이 같으므로 결과가 바뀌지 않는다.
+- `forget` 응답의 `purged`에 `digests`가 더해진다.
+- 답 꾸러미의 `policy_id`가 `memento-pack-policy-v1`로 바뀐다.
+
+### Added
+
+- **말한 시각과 사건 시각.** `remember`, `batch_remember`, `amend`가 `mentionTime`(그 말을 한 때)과 `eventTime`(그 일이 일어난 때)을 받는다. `eventTime`을 주지 않으면 본문의 "어제", "2026-03-14", "last week" 같은 표현에서 읽어 낸다(`MEMENTO_EVENT_TIME_EXTRACT`, 기본 on).
+- **시간으로 찾고 줄 세우기.** `recall`의 `timeRange: { basis: "event" }`는 사건 시각으로 기간을 거르고, `order: "chronological"`은 결과를 일어난 순서로 돌려준다.
+- **바뀐 값과 엇갈린 기억 보기.** `includeHistory: true`면 현재 값 바로 뒤에 이전 값이 붙는다. 아직 정리되지 않은 모순은 `conflicts_with`로 표시된다.
+- **근거 점검(`_meta.evidence`).** recall이 근거 상태를 알려 준다: `no_evidence`(찾은 기억 없음), `partial`(질문의 핵심 낱말 일부가 결과에 없음, `uncovered_terms`로 표시), `conflicting`, `supported`. 에이전트는 이 값으로 다시 찾을지, "모른다"고 답할지 정한다.
+- **질문 유형별 근거 묶음.** "몇 번", "언제", "지금도" 같은 질문은 자동으로 알아보고(`intent`), 결과를 시간순 표로 정리해 같은 내용은 한 번만 센다. `intent`를 직접 주면 그 유형에 맞는 기본값(더 많은 후보, 시간순, 이전 값 포함)이 적용된다.
+- **주제별 시간선과 선호 목록.** 정리 주기가 주제마다 기록을 시간순 한 줄씩 모은 요약과, 사용자 선호를 모은 목록을 만든다(`MEMENTO_DIGEST`, 기본 on, LLM 미사용, 할당량 미차감). 여러 대화에 흩어진 기록을 묻는 질문에 함께 실린다. 원본을 지우면 요약도 지워진다.
+- `RERANKER_MIN_SCORE`: 리랭커를 쓸 때 점수가 낮은 후보를 결과에서 뺀다(기본 0, 끔).
+- `scripts/measure/recall-scale.mjs`: 로컬 시험 DB에서 파편 수에 따른 recall 지연을 잰다.
+
+### Changed
+
+- 자연어 검색의 그래프 확장이 키워드 검색 상위뿐 아니라 의미 검색 상위 결과의 연결도 따라간다.
+
+## [6.3.1] - 2026-10-10
+
+### 업그레이드 주의
+
+- 데이터베이스 마이그레이션은 없다. `git pull`, `npm install`, 서비스 재시작이면 된다.
+- 절차–오류 연결 제안(`_meta.link_suggestions`)의 `fromId`와 `toId`가 절차→오류에서 오류→절차로 뒤집힌다. 제안을 그대로 `link`에 넘기던 호출은 이제 규약에 맞는 방향으로 연결된다.
+- `resolved_by`로 해결된 에러의 중요도를 0.5로 내리는 처리가 시작점이 error인 호출에서 동작한다. 이전에는 이 방향에서 발동하지 않았다.
+- 해결책 → 에러 방향으로 저장된 기존 `resolved_by`는 바꾸지 않는다. `graph_explore`(절차)와 `reconstruct_history`의 미해결 판정이 두 방향을 모두 읽는다.
+
+### Added
+
+- reflect 연결 제안의 `meta.relationHint`. 오류–결정 후보(`caused_by`)에 `link` 규약에 맞는 오류→결정 `resolved_by` 연결(`fromId`, `toId`, `relationType`)을 함께 싣는다. 후보의 기존 키는 바뀌지 않는다.
+
+### Changed
+
+- `resolved_by`의 방향을 "에러(fromId) → 해결책(toId)"로 통일했다. 절차–오류 연결 제안과 자동 연결의 `fromId`와 `toId`가 절차→오류에서 오류→절차로 바뀐다. 해결책 → 에러 방향으로 저장된 이전 연결은 그대로 두고 `getRCAChain`(절차)과 미해결 판정이 계속 읽는다.
+
+### Fixed
+
+- `link`가 `resolved_by`를 걸 때 해결된 에러의 중요도를 0.5로 내리는 처리가 도착점이 error일 때만 동작하던 문제. 규약 방향(시작점이 error)에서는 발동하지 않았다. 시작점이 error이면 시작점을, 이전 방향이면 도착점의 error를 내린다.
+- 케이스 이벤트의 `resolved_by` 간선이 해결 이벤트에서 에러 이벤트 방향으로 기록되어, `reconstruct_history`의 미해결 브랜치 판정이 에러를 해결된 것으로 보지 못하던 문제. 간선을 에러에서 해결 이벤트 방향으로 기록하고, 판정은 어느 방향의 간선이든 해결로 본다.
+- `graph_explore`(`getRCAChain`)가 해결책 → 에러 방향으로 저장된 절차 `resolved_by`를 에러에서 시작할 때 찾지 못하던 문제.
+
+## [6.3.0] - 2026-10-10
+
+### 업그레이드 주의
+
+- 마이그레이션 `migration-064`(`fragment_segment` 표)가 포함된다. 운영 반영 직전에 `scripts/ops/backup.sh --label pre-migration`으로 백업을 만든다. 구간 임베딩은 기본 꺼짐이라 `MEMENTO_SEGMENT_EMBEDDING_ENABLED`와 `MEMENTO_SEGMENT_SEARCH`를 켜기 전에는 검색 결과가 달라지지 않는다.
+- `reflect`의 `_meta.link_suggestions`가 기본으로 줄어든다. 키워드 겹침 0.4 미만 후보는 만들지 않고 그룹당 3개까지만 싣는다. 이전 동작은 `MEMENTO_LINK_SUGGEST_MIN_OVERLAP=0`과 `MEMENTO_LINK_SUGGEST_MAX=0`으로 되돌린다.
+- 의존성 `sharp` override가 0.35.5로 올라간다. `git pull` 뒤 `npm install`을 실행하고 서비스를 재시작한다.
+
+### Added
+
+- reflect 연결 제안(`_meta.link_suggestions`)에 최소 키워드 겹침 기준(`MEMENTO_LINK_SUGGEST_MIN_OVERLAP`, 기본 0.4), 1위와 2위 후보의 최소 점수 차이(`MEMENTO_LINK_SUGGEST_MIN_MARGIN`, 기본 0), 그룹당 상한(`MEMENTO_LINK_SUGGEST_MAX`, 기본 3)을 추가했다. 제안 항목에 `meta`(`score`, `margin`, `signals`, `scoreVersion`)가 붙고, 상한으로 빠진 개수는 `_meta.link_suggestions_omitted`로 알린다. 후보는 같은 그룹(workspace, case_id, topic)의 파편끼리만 짝짓고 점수 동률은 id 순으로 정한다. 키워드 겹침은 소문자·중복 제거한 집합으로 센다. 기준을 0으로 두면 이전처럼 겹침이 없어도 가장 높은 후보를 제안한다.
+- 구간(세그먼트) 임베딩(옵트인, 기본 꺼짐). 400자를 넘는 파편을 300자 창으로 나눠 구간별 벡터를 `fragment_segment`(migration-064)에 두고, L3 시맨틱 검색에서 조각별 최대 유사도(감쇠 0.95, 영향 조각 상한 10)를 본문 후보에 합친다. 최대 1000자 본문 속 곁다리 언급이 본문 벡터에 희석되어 놓치던 근거를 회수한다. 환경변수 `MEMENTO_SEGMENT_EMBEDDING_ENABLED`, `MEMENTO_SEGMENT_SEARCH`, `MEMENTO_SEGMENT_MIN_CHARS`, `MEMENTO_SEGMENT_DECAY`, `MEMENTO_SEGMENT_ADOPT`, `MEMENTO_SEGMENT_SEARCH_TIMEOUT_MS`, `MEMENTO_SEGMENT_RPM`. 키/에이전트/워크스페이스 열 없이 부모 `fragments`로 격리한다. 기존 파편은 `scripts/backfill-fragment-segments.js`로 채운다.
+- `RERANKER_WINDOW`(기본 30)와 `RERANKER_TOP_K`(기본 15) 환경변수. 리랭커가 재정렬하는 RRF 상위 후보 수와 재정렬 뒤 남기는 개수를 설정으로 뺐다. 기본값은 기존 동작과 같다.
+- `MEMENTO_RECALL_MIN_SIM_CEIL` 환경변수. `SearchParamAdaptor.getMinSimilarity`가 반환하는 적응형 임계값에 옵트인 상한을 강제한다. 학습 규칙이 병합 결과 건수(평균 8 초과면 상승)를 기준으로 해서 값이 `CLAMP_MAX`(0.60)에 고착될 수 있는 배포를 위한 것이다. 하한과 함께 설정하면 하한이 우선한다. 미설정 시 기존 동작 그대로.
+- 구간 임베딩 워커가 한 회차 안의 파편을 `MEMENTO_SEGMENT_CONCURRENCY`(기본 4, 1~32)개씩 동시에 임베딩한다. 직렬 처리는 임베딩 백엔드가 놀아도 처리량이 막혔다. 임베딩 호출은 `EMBEDDING_CONCURRENCY`와 `EMBEDDING_SEM_WAIT_MS`를 함께 쓰므로 동시성을 올리면 두 값도 맞춰 올린다.
+- 본문 절삭 가시화. 300자(episode 1000자)를 넘어 잘린 본문은 응답의 `content_truncated`(`original_length`, `stored_length`)와 `validation_warnings`의 `contentTruncated`로 알린다. `batch_remember`는 항목별 `results[].content_truncated`와 최상위 `truncated_count`(1건 이상일 때만)를 돌려주고, `remember`의 dryRun 응답에도 같은 필드가 붙는다. 절삭이 없으면 응답은 달라지지 않는다. `contentTruncated`는 `symbolic_hard_gate`의 차단 대상이 아니다.
+- 서버 instructions 상단에 저장 계약(본문 상한 300/1000자, 초과분 폐기, 입력 상한 4000자) 블록. 수치는 `lib/memory/contentGuard.js`의 상수에서 만든다.
+
+### Changed
+
+- 벤치마크 리포트(`docs/benchmark.md`)와 README의 LongMemEval-S 수치를 bge-m3, 구간 검색 켬 기준 최신 측정값으로 바꿨다.
+- 도구 스키마와 API 문서의 content 설명을 "300자 이내 권장"에서 "초과분 폐기"로 바꿨다. 절삭 동작은 변하지 않는다. 4000자는 episode 전용이 아니라 content 필드의 공통 입력 상한이다.
+
+### Fixed
+
+- `sharp` override를 0.35.5로 올려 권고 GHSA-wq5f-xc86-pv6w(librsvg 취약점)를 해소했다.
+- 본문에 특수 토큰 문자열(`<|endoftext|>` 등)이 있으면 토큰 수 계산이 예외를 던져 `batch_remember`가 그 항목을 거부하던 문제. 특수 토큰도 일반 텍스트로 센다.
+- 리랭커가 재정렬한 파편이 재정렬되지 않은 파편(연결 파편, 재정렬 창 밖) 아래로 밀리던 문제. 재정렬 점수와 복합 점수의 척도 차이를 보정해 재정렬된 파편이 항상 위에 온다.
+
 ## [6.2.0] - 2026-10-05
 
 ### 업그레이드 주의

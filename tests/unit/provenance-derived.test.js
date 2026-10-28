@@ -110,7 +110,7 @@ describe("통합 경로의 모순 감사 파편", () => {
 
 describe("통합 분할 자식", () => {
   it("후보 조회는 켜지면 trust_tier를 읽고 꺼지면 읽지 않는다", () => {
-    assert.match(buildSplitCandidateQuery([], { provenance: true }).sql, /workspace, trust_tier\n/);
+    assert.match(buildSplitCandidateQuery([], { provenance: true }).sql, /event_time_precision, trust_tier\n/);
     assert.doesNotMatch(buildSplitCandidateQuery([]).sql, /trust_tier/);
   });
 

@@ -55,7 +55,9 @@ const ALLOWED_SEMANTIC_SQL = Object.freeze({
   "scripts/reextract-reflect-keywords.js::main":
     "운영자가 실행하는 일회성 백필. reflect 파편의 키워드를 저장된 본문에서 다시 추출한다",
   "scripts/backfill-reflect-workspace.js::main":
-    "운영자가 실행하는 일회성 백필. 같은 세션 파편의 workspace를 reflect 파편에 옮겨 적는다"
+    "운영자가 실행하는 일회성 백필. workspace 없는 파편에 topic 또는 본문이 가리키는 workspace를 적는다",
+  "scripts/measure/recall-scale.mjs::seedTo":
+    "로컬 일회용 DB에만 붙는 지연 측정. 합성 파편 수만 건을 한 문장으로 채운다(끝나면 지운다)"
 });
 
 /** lib, scripts, bin 전체를 스캔한다. */

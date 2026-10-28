@@ -138,7 +138,7 @@ Stages are declared as a `stageDefs` array. Adding a new stage requires only a s
 4. `gc_preview` — counts GC candidates by type; written to results.gcCandidatesByType as a Map
 5. `split_long_fragments` — splits over-length fragments
 6. `merge_duplicates` — merges duplicates by content_hash. Group key is `(key_id, workspace, content_hash)`. Master key (key_id IS NULL) fragments are excluded from auto-merge. Post-GROUP BY scope mismatch assertion re-validates to block cross-tenant merges
-7. `semantic_dedup` — semantic deduplication for KNN cosine >= 0.92 within topic and key_id scope
+7. `semantic_dedup` — reads the vectors of each topic, workspace and key_id group once, computes the cosine of every pair in memory, and merges, through the gate, pairs with cosine >= 0.92 among each fragment's exact top 3. The survivor is the one with the larger (created_at, id). Topics left when the stage exceeds `DEDUP_TIME_BUDGET_MS` move to the next cycle
 8. `compress_old_fragments` — groups long-unaccessed low-importance fragments by topic, then KNN-compresses
 9. `embeddings_backfill` — async embedding generation for fragments with NULL embedding
 10. `retro_link` — GraphLinker.retroLink() retroactively links up to 20 orphan fragments (have embedding, no links)
@@ -147,13 +147,14 @@ Stages are declared as a `stageDefs` array. Adding a new stage requires only a s
 13. `promote_anchors` — promotes fragments with access_count >= 10 + importance >= 0.8 to `is_anchor=true`. `MEMENTO_AUTO_PROMOTE_ANCHORS=false` skips only this stage with reason `disabled_by_config` (default: true).
 14. `detect_contradictions`: 3-stage hybrid contradiction detection. pgvector cosine > 0.85 candidate extraction -> mDeBERTa NLI -> Gemini CLI escalation. A contradiction adds a `contradicts` link, halves the importance of the older side and closes it via `superseded_by`; an anchor on the older side is left open. Resolution records go to the `contradiction_audit` topic, which contradiction and supersession detection skip. The record function is a `rememberAudit` callback injected by `MemoryManager` through `MemoryConsolidator`; `ContradictionDetector` does not import the facade. A missing or failed callback does not roll back the resolution. Results are returned as separate `nliResolvedDirectly` and `nliSkippedAsNonContra` counts
 15. `detect_supersessions`: Gemini CLI judges supersession relationships for fragment pairs with embedding similarity 0.7~0.85. GraphLinker never creates supersession from similarity alone; it links candidates above 0.7 as `related` only. Fragments are superseded only by this judgment or by an explicit `supersedes` argument to remember
-16. `process_pending_contradictions` — when Gemini CLI is available, dequeues up to 10 items from Redis pending queue for re-evaluation
-17. `feedback_report` — generates aggregated usefulness report from tool_feedback/task_feedback. When at least one irrelevant judgement exists, appends a cause distribution table (not_stored/search_miss/scope_leak/topic_mismatch/other/unreported); the task-level section adds the outcome distribution, the number of sessions reporting an outcome, sessions judged by a human evaluator, and sessions carrying unmet requirements. It warns against over-reading the success rate when outcomes go unreported, and flags possible self-report bias when the success rate is 100% while unreported sessions outnumber reported ones
-18. `feedback_calibration` — aggregates tool_feedback by session over the last 7 days, then applies a multiplier via the `feedbackFactor(allRelevant, allSufficient)` pure function (lib/memory/consolidate/feedbackFactor.js). POSITIVE (allRelevant=true AND allSufficient=true): ×1.1, MIXED (allRelevant=true AND allSufficient=false): ×0.95, NEGATIVE (allRelevant=false): ×0.85. Excludes `is_anchor=true`, clamped to [0.05, 1.0]
-19. `prune_keyword_indexes` — removes orphaned Redis keyword indexes
-20. `collect_stale_fragments` — collects fragments past their verification cycle; written to results.stale_fragments
-21. `purge_stale_reflections`: among topic='session_reflect' fragments, keeps the latest 5 per type and deletes the rest with 30+ days age + importance < 0.55 (max 30 per cycle)
-22. `gc_search_events` — garbage-collects old search events
+16. `build_digests`: builds, by rule, a timeline for each topic group with at least 5 valid fragments and a preference profile for each group with at least 2 preference fragments into `fragment_digest` (migration-066). No LLM call. A digest whose source ids and content hashes did not change is not rewritten, and a digest not rewritten in this cycle whose sources are no longer all valid is deleted. Up to 200 groups per cycle, most recently active first. Skipped with `MEMENTO_DIGEST=off`
+17. `process_pending_contradictions` — when Gemini CLI is available, dequeues up to 10 items from Redis pending queue for re-evaluation
+18. `feedback_report` — generates aggregated usefulness report from tool_feedback/task_feedback. When at least one irrelevant judgement exists, appends a cause distribution table (not_stored/search_miss/scope_leak/topic_mismatch/other/unreported); the task-level section adds the outcome distribution, the number of sessions reporting an outcome, sessions judged by a human evaluator, and sessions carrying unmet requirements. It warns against over-reading the success rate when outcomes go unreported, and flags possible self-report bias when the success rate is 100% while unreported sessions outnumber reported ones
+19. `feedback_calibration` — aggregates tool_feedback by session over the last 7 days, then applies a multiplier via the `feedbackFactor(allRelevant, allSufficient)` pure function (lib/memory/consolidate/feedbackFactor.js). POSITIVE (allRelevant=true AND allSufficient=true): ×1.1, MIXED (allRelevant=true AND allSufficient=false): ×0.95, NEGATIVE (allRelevant=false): ×0.85. Excludes `is_anchor=true`, clamped to [0.05, 1.0]
+20. `prune_keyword_indexes` — removes orphaned Redis keyword indexes
+21. `collect_stale_fragments` — collects fragments past their verification cycle; written to results.stale_fragments
+22. `purge_stale_reflections`: among topic='session_reflect' fragments, keeps the latest 5 per type and deletes the rest with 30+ days age + importance < 0.55 (max 30 per cycle)
+23. `gc_search_events` — garbage-collects old search events
 
 ### compressOldFragments (KNN Batch Parallelization)
 
@@ -501,6 +502,7 @@ Temporal axis (valid_from/valid_to, superseded_by) preserves existing data
 ```
 
 - **Cost efficiency**: 99% of candidates handled by NLI; LLM calls occur only for numerical/domain contradictions
+- **Presentation order**: the A/B order of the two fragments sent to the LLM is set by a hash of the id pair. A pair always gets the same order, and neither the new fragment nor the smaller id always goes first
 - **Zero data loss**: Temporal columns manage versioning instead of deleting fragments
 - **Implementation files**: `lib/memory/signals/NLIClassifier.js`, `lib/memory/consolidate/MemoryConsolidator.js`
 - **Environment variable**: When `NLI_SERVICE_URL` is unset, ONNX in-process is used automatically (~280MB, downloaded on first run)
@@ -522,11 +524,11 @@ The final stage of the remember() post-processing pipeline. Performs L1/L3 searc
 
 ### CaseRewardBackprop (CaseEventStore -> CaseRewardBackprop)
 
-When a verification event is added to case_events, atomically adjusts the importance of evidence fragments (via fragment_evidence JOIN) for that case.
+When a verification event is added to case_events, atomically adjusts the importance of the evidence fragments linked to that event (fragment_evidence `supports`, `produced_by`). The reward is `delta x confidence`, and `contradicts` evidence is excluded.
 
-- SQL: `UPDATE fragments SET importance = LEAST(1.0, GREATEST(0.0, importance + $delta)) FROM fragment_evidence, case_events WHERE ...`
+- SQL: `UPDATE fragments f SET importance = LEAST(1.0, GREATEST(0.0, f.importance + $delta * w.confidence)) FROM (SELECT fragment_id, MAX(confidence) ... FROM fragment_evidence WHERE event_id = $1 AND kind IN ('supports','produced_by') GROUP BY fragment_id) w WHERE ...`. A fragment with several evidence rows is adjusted once, with its highest confidence
 - Concurrency: UPDATE FROM is atomic via row locking. No read-modify-write race condition.
-- Trigger: fire-and-forget after `CaseEventStore.append()` COMMIT
+- Trigger: fire-and-forget after `CaseEventStore.append()` writes the event and its evidence in one transaction and commits, so the reward never runs before the evidence exists
 - Singleton: `getBackprop()` (shared for server lifetime)
 - Environment variable: `MEMENTO_CASE_BACKPROP_ENABLED=true` is required to activate (default: false). Also exported as the `CASE_BACKPROP_ENABLED` constant from `lib/config.js`. When disabled, the backprop call after append() is treated as a no-op.
 

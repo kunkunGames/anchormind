@@ -309,6 +309,46 @@ describe("ReflectProcessor - session consolidation", () => {
     assert.deepEqual([...args[1]].sort(), ["wm-1", "wm-2"]);
   });
 
+  it("링커에 파편 id별 그룹 번호를 넘기고 제안 상한으로 잘린 수를 응답에 싣는다", async () => {
+    const deps = createMockDeps({
+      sessionLinker: {
+        consolidateSessionFragments: mock.fn(async () => null),
+        autoLinkSessionFragments   : mock.fn(async () => ({ linkSuggestions: [], linkSuggestionsOmitted: 2 })),
+      },
+    });
+    const processor = new ReflectProcessor(deps);
+    madeProcessors.add(processor);
+
+    const result = await processor.process({
+      summary: ["테스트 요약 문장 하나가 여기에 들어갑니다"], decisions: ["테스트 결정 하나가 여기에 들어갑니다"],
+      agentId: "test-agent"
+    });
+
+    const call = deps.sessionLinker.autoLinkSessionFragments.mock.calls[0].arguments;
+    assert.ok(call[3].groupOf instanceof Map, "네 번째 인자에 groupOf Map");
+    assert.ok(result.fragments.length > 0);
+    for (const f of result.fragments) assert.equal(typeof call[3].groupOf.get(f.id), "number");
+    assert.equal(result._link_suggestions_omitted, 2);
+  });
+
+  it("링커가 돌려준 제안의 meta.relationHint를 변형 없이 응답에 싣는다", async () => {
+    const suggestion = { fromId: "e1", toId: "d1", relationType: "caused_by", reason: "schema_fit_failed",
+      meta: { score: 0.6, margin: null, signals: ["keyword_overlap"], scoreVersion: "overlap-v2",
+              relationHint: { fromId: "e1", toId: "d1", relationType: "resolved_by" } } };
+    const deps = createMockDeps({
+      sessionLinker: {
+        consolidateSessionFragments: mock.fn(async () => null),
+        autoLinkSessionFragments   : mock.fn(async () => ({ linkSuggestions: [suggestion], linkSuggestionsOmitted: 0 })),
+      },
+    });
+    const processor = new ReflectProcessor(deps);
+    madeProcessors.add(processor);
+
+    const result = await processor.process({ summary: ["테스트 요약 문장 하나가 여기에 들어갑니다"], agentId: "test-agent" });
+
+    assert.deepEqual(result._link_suggestions, [suggestion]);
+  });
+
   it("sessionId 없으면 evict 미호출", async () => {
     const deps      = createMockDeps();
     const processor = new ReflectProcessor(deps);

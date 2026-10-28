@@ -51,6 +51,8 @@
     { "name": "idx_ce_source_fragment_id", "table": "case_events", "unique": false,
       "definition": "ON agent_memory.case_events (source_fragment_id) WHERE source_fragment_id IS NOT NULL" },
     { "name": "idx_fragments_content_tokens", "table": "fragments",
-      "definition": "ON agent_memory.fragments USING gin (content_tokens)" }
+      "definition": "ON agent_memory.fragments USING gin (content_tokens)" },
+    { "name": "idx_fragments_world_time", "table": "fragments",
+      "definition": "ON agent_memory.fragments ((COALESCE(event_time, mention_time, created_at))) WHERE valid_to IS NULL" }
   ]
 }

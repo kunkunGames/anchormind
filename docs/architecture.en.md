@@ -42,6 +42,9 @@ server.js  (HTTP server)
             |   +-- FragmentSearch.js     3-layer search orchestration (structural: L1->L2, semantic: L1->L2||L3 RRF merge). `_executeSearch` decomposes into `_buildTextRRF` (L2+L3 parallel RRF when text parameter present) / `_buildFallbackCombined` (L1+L2 only when no text)
             |   +-- FragmentReader.js     Fragment reads. `getById(id, agentId, keyId, groupKeyIds)` -- groupKeyIds parameter enables single-call lookup of fragments belonging to same-group keys. `getByIds`, `getHistory`, `searchByKeywords`, `searchBySemantic`, `findCaseIdBySessionTopic`, `findErrorFragmentsBySessionTopic`
             |   +-- ContextBuilder.js     Dedicated context() logic. Reserves effective-workspace anchor slots first, deduplicates candidates by ID in anchor > core > learning > working order, guarantees anchors plus minimum non-anchor slots, and uses one token-selected set for flat/structured/injectionText outputs
+            |   +-- ContextIndexView.js   List lines (first sentence, 60 characters) and their token count for context `view: "index"`
+            |   +-- AnchorBudgetLoader.js Reads the currently injected anchors (top anchors of the same key and workspace) for the budget check on a new anchor mark
+            |   +-- WorkspaceBoundary.js  Pure function adding workspace_warning to facts from another workspace on allWorkspaces reads
             |   +-- ContextLines.js       context injection line renderer (pure functions). Headers and the `- ` line prefix are fixed; with `MEMENTO_CONTEXT_ANNOTATE=on` memory lines end with ` (YYYY-MM-DD, assertion)`
             |   +-- AnswerPack.js         recall `format:"pack"` answer pack v0 renderer (pure functions). Fixed policy paragraph, `<<<MEMORY ...>>>` delimiter blocks, content escaping and 1000 character cap, UTC dates, caseId/topic groups
             |   +-- AnswerPackLoader.js   Answer pack source and supersession chain (superseded_by links) lookup with the same agent, key and workspace predicates as recall. Adds `origin` and `trust_tier` to default recall responses (`MEMENTO_PROVENANCE`)
@@ -52,7 +55,7 @@ server.js  (HTTP server)
             |   +-- provenance-metrics.js Core trust exclusion metric `memento_context_core_trust_excluded_total{reason}`
             |   +-- GraphNeighborSearch.js L2.5 graph neighbor search (fragment_links 1-hop bidirectional UNION, tanh-saturated scoring + relation-type boosts)
             |   +-- HistoryReconstructor.js case_id/entity-based narrative reconstruction (ordered_timeline, causal_chains, unresolved_branches)
-            |   +-- BudgetSelector.js     recall token budget selection (`MEMENTO_RANK_BEFORE_BUDGET`). Pure functions for the search-order cut (`trimInSearchOrder`) and the final-score selection (`selectWithinBudget`)
+            |   +-- BudgetSelector.js     recall token budget selection. Pure functions for the search-order cut (`trimInSearchOrder`) and the final-score selection (`selectWithinBudget`)
             |   +-- LexicalSearch.js      Content lexical channel (L2b, `MEMENTO_LEXICAL_CHANNEL`). Only in searches opened by recall, turns the query into an OR tsquery with the same tokenization as the write paths and returns the top 200 by `ts_rank_cd` among up to 400 matching rows in key, workspace and agent scope (query time limit `MEMENTO_LEXICAL_TIMEOUT_MS`)
             |   +-- RankFusion.js         RRF merge of layer results (`mergeRRF`) and ordering of cache-hydrated candidates (`mergeHydratedCandidates`)
             |   +-- Reranker.js           Cross-Encoder reranking (disabled by default; enable via MEMENTO_RERANKER_ENABLED or RERANKER_URL)
@@ -67,6 +70,7 @@ server.js  (HTTP server)
             |   +-- SearchSideEffects.js  Search side-effect isolation module. commitSearchSideEffects() synchronously returns searchEventId; fire-and-forgets SearchParamAdaptor.recordOutcome()
             +-- write/                    Write layer modules
             |   +-- WriteGate.js          Single semantic write gate. Applies the normalize, sensitive, length, policy, workspace and anchor steps in order and records violations as warnings or rejects them on hard-gate keys. The anchor step judges anchor designation by remember and amend against the key's anchor permission and anchor limit. `MEMENTO_WRITE_GATE`, `MEMENTO_ANCHOR_PERMISSION`
+            |   +-- LessonCue.js          Normalizes reflect lessons and registers cue rows (`fragment_synthetic_query`, origin='cue')
             |   +-- ReviewQueue.js        Synchronous review queue decisions (pure functions). Collects instruction override phrases, anchors, preferences and procedures with trust tier 1 or lower and unauthorized anchor warnings as reasons, and stores review_state='pending' according to the key's review mode (off, flagged, all). Holds anchor requests until approval. INSERT column fragment and update SET fragment. `MEMENTO_REVIEW_QUEUE`
             |   +-- reviewRules.js        Instruction override phrase rule table (Korean, English). The table of ordinary procedural sentences that must not match is in the tests
             |   +-- write-gate-metrics.js Gate verdict metric `memento_write_gate_total{entry,outcome}`, anchor decision metric `memento_anchor_decision_total{outcome,reason}`
@@ -107,6 +111,7 @@ server.js  (HTTP server)
             |   +-- contradictionAudit.js    Contradiction resolution record content (fragment ids only with `MEMENTO_FORGET_CASCADE=on`) and topic
             +-- consolidate/              Consolidation/GC layer modules
             |   +-- MemoryConsolidator.js 22-stage declarative maintenance pipeline (stageDefs array, TOTAL_STAGES = stageDefs.length). NLI + Gemini hybrid
+            |   +-- statsSummaries.js     memory_stats summaries: workspace distribution (with anchor count and anchor tokens), per-key fill rate, fragments per session
             |   +-- ConsolidatorGC.js     Feedback reports, stale fragment collection/cleanup, long fragment splitting, feedback-based correction
             |   +-- FragmentGC.js         Fragment expiration/deletion, exponential decay, TTL tier transitions (permanent parole + EMA batch decay)
             |   +-- idOrderedUpdate.js    Locks and updates decay and utility score changes in id-ascending batches (`MEMENTO_SCORE_UPDATE_BATCH`). Rows below the minimum change (`MEMENTO_DECAY_MIN_DELTA`, `MEMENTO_UTILITY_MIN_DELTA`) are not rewritten
@@ -149,6 +154,7 @@ server.js  (HTTP server)
             +-- LexicalCoverage.js        content_tokens fill metrics `memento_lexical_tokens_coverage_ratio`, `memento_lexical_tokens_missing` (no labels)
             +-- keyScope.js               `keyScopeClause(params, column, { keyId, groupKeyIds })` shared helper. Generates key_id-scoped WHERE clauses. Used by FragmentReader.getById / findCaseIdBySessionTopic / findErrorFragmentsBySessionTopic / GraphLinker / LinkStore / HistoryReconstructor / reconstruct.js
             +-- anchorPolicy.js           Pure anchor decision functions: change kind (set, clear), permission and per-key limit decision, non-identifying principal label of context lines (`k:` + first 4 characters of the key id sha256)
+            +-- anchorBudget.js           Pure context anchor token budget functions (budget.anchor report, over-budget check and demote candidates for a new anchor mark)
             +-- CaseEventStore.js         Semantic milestone log (case_events CRUD, DAG edges, evidence join)
             +-- memory-schema.sql         PostgreSQL schema definition
             +-- migrations/               59 DB migration SQL files (migration-001 through migration-060; 046 is unused), applied sequentially against the schema_migrations table. Used by `scripts/migrate.js` and `scripts/lint-migrations.js`
@@ -303,6 +309,7 @@ lib/tools/
 +-- memory-audit.js File audit records and audit event values of the memory tools (remember, amend, forget, link, anchor)
 +-- reconstruct.js  reconstruct_history, search_traces tool handlers (Narrative Reconstruction)
 +-- memory-schemas.js  Tool schema definitions (inputSchema)
++-- reflect-params.js  Schemas of reflect `lessons` and context `view`
 +-- tool-head.js  name, title and MCP hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) of every tool
 +-- recall-response-params.js recall response shape parameters (`fields`, `format`) schema fragments
 +-- origin-param.js `origin` parameter schema fragment of remember and batch_remember items
@@ -808,7 +815,7 @@ Evidence join table linking fragments to case_events. Connects fragments that su
 
 ### fragment_synthetic_query
 
-Auxiliary vector table holding synthetic queries generated when a fragment is stored, together with their embeddings (migration-043). It is separate from `fragments`, so it is not counted by the `QuotaChecker` `fragment_limit` check, and since it is derived data it is regenerated by backfill when lost. The embedding dimension follows `fragments.embedding` (migration-049 and the alignment step of `npm run migrate`).
+Auxiliary vector table holding search phrases that lead back to a fragment, together with their embeddings (migration-043). Rows are of two kinds: reverse queries an LLM generated from the content (`origin='generated'`) and situation cues of reflect lessons (`origin='cue'`). It is separate from `fragments`, so it is not counted by the `QuotaChecker` `fragment_limit` check, and since it is derived data it is regenerated by backfill when lost. The embedding dimension follows `fragments.embedding` (migration-049 and the alignment step of `npm run migrate`).
 
 | Column | Type | Description |
 |-|-|-|
@@ -820,8 +827,22 @@ Auxiliary vector table holding synthetic queries generated when a fragment is st
 | agent_id | TEXT | Agent identifier (default `default`) |
 | workspace | TEXT | Workspace isolation |
 | created_at | TIMESTAMPTZ | Creation time |
+| source_content_hash | TEXT | Source `content_hash` when the row was made. Only rows matching the current content are searched (migration-061) |
+| origin | TEXT | `generated` (rebuilt after a content change) or `cue` (kept after a content change). Default `generated` (migration-068) |
 
 A UNIQUE index on `(fragment_id, md5(query_text))` prevents the same query from being stored twice.
+
+### embedding_profile
+
+One-row table recording the settings that produced the stored embeddings (migration-069). The startup check compares it with the current settings and warns that re-embedding is needed when the dimensions match but the provider or model differs. The first startup fills an empty table; after re-embedding, update it with `node scripts/check-embedding-consistency.js --record`.
+
+| Column | Type | Description |
+|-|-|-|
+| id | SMALLINT PK | Always 1 |
+| provider | TEXT | Embedding provider |
+| model | TEXT | Embedding model |
+| dimensions | INTEGER | Vector dimensions |
+| recorded_at | TIMESTAMPTZ | Recording time |
 
 ### idempotency_records
 
@@ -1045,7 +1066,7 @@ The recall tool searches from the least expensive layer first. If an earlier lay
 
 **L2: PostgreSQL GIN index.** Always executed after L1. A GIN (Generalized Inverted Index) is on the keywords TEXT[] column. Search uses the `keywords && ARRAY[...]` operator -- an operator that checks for array intersection. The GIN index indexes each array element individually, so this operation is processed as an index scan, not a sequential scan.
 
-**L2.5: Graph neighbor expansion.** Collects 1-hop neighbors of the top 5 L2 fragments from fragment_links. Handled by GraphNeighborSearch with a 1.5x RRF weight multiplier. Graph neighbors are only executed when L2 results exist, so the added cost is a single SQL query.
+**L2.5: Graph neighbor expansion.** For text searches, collects 1-hop neighbors from fragment_links of `graph.seedCount` seeds (default 10) taken alternately from the top L2 and L3 fragments, so the links of fragments found only by semantic search also become candidates. Handled by GraphNeighborSearch with a 1.5x RRF weight multiplier. It does not run without seeds, and the added cost is a single SQL query.
 
 **L3: pgvector HNSW cosine similarity.** Triggered only when the recall parameters include a `text` field. Insufficient result count alone does not activate L3. The query text is converted to an embedding vector, and `embedding <=> $1` computes cosine distance. EmbeddingCache caches query embeddings in Redis (key: `emb:q:{sha256 first 16 chars}`, 1-hour TTL), skipping embedding API calls on repeated identical queries. Falls back to the original API on cache failure. All embeddings are L2-normalized unit vectors, so cosine similarity and inner product are equivalent. HNSW indexes quickly find approximate nearest neighbors. The `threshold` parameter sets a similarity floor -- L3 results below this value are excluded. L1/L2-routed results lack a similarity value and are therefore exempt from threshold filtering.
 
@@ -1059,7 +1080,7 @@ After the three layers' results are merged via RRF, time-semantic composite rank
 
 **MemoryRecaller final sort (`computeRecallScore`).** Immediately after FragmentSearch results are merged with any `includeLinks` fragments, `MemoryRecaller.recall` performs one additional unified sort via `computeRecallScore`. Naive composite re-sorting at this stage would discard cross-encoder reranker results, so the following four principles are applied. (1) If a fragment carries a `rerankerScore`, that score is preserved as the base. (2) If not, the composite formula `effectiveImportance × 0.4 + temporalProximity × 0.3 + similarity × 0.3` is multiplied by `unrerankedBaseDiscount` (0.85) to penalize fragments that were not validated by reranking. (3) `lexicalMatchScore` (topic exact +4, keyword in topic +2, keyword in keywords +1.5, keyword in content +1, multi-match bonus +2) is log-normalized and added as a bounded additive term using `lexicalWeightReranked` (0.12) or `lexicalWeightFallback` (0.18) -- the applicable weight is selected per-fragment based on `rerankerScore` presence, not per result set. (4) Fragments added via `includeLinks` are tagged `_source="linked"` before sorting; their lexical weight is halved by `lexicalLinkedMultiplier` (0.5), and they are removed from the final response after sorting. This design intentionally avoids hard overrides such as `if (lexical > 0) return 1000 + lexical` -- a pattern that was evaluated and rejected in a multi-LLM review (Oracle/Claude/Gemini) for causing cross-encoder result discarding, double-counting, and pagination instability.
 
-**Budget selection (`BudgetSelector`).** With `MEMENTO_RANK_BEFORE_BUDGET=on` (the default), FragmentSearch returns candidates without a token budget cut, `MemoryRecaller` merges linked fragments and scores them with `computeRecallScore`, and `selectWithinBudget` selects within `tokenBudget`. When every candidate fits the budget, all are selected; linked fragments use the same budget. With `off`, the search layer cuts the budget in search order (`trimInSearchOrder`) and linked fragments are added outside the budget. Selection rules and caps are in the `MEMENTO_RANK_BEFORE_BUDGET` row of [Configuration](configuration.en.md).
+**Budget selection (`BudgetSelector`).** FragmentSearch returns candidates without a budget cut; `MemoryRecaller` merges linked fragments, scores them with `computeRecallScore`, and `selectWithinBudget` keeps the highest-scoring ones within `tokenBudget`. Linked fragments share the same budget.
 
 **Content lexical channel (`LexicalSearch`, L2b).** A text search opened by recall calls the lexical channel in parallel with L2 and L3 (`lexicalChannel: true` on the search query is set only by the recall entry point; internal searches of the write paths such as conflict detection and auto linking never call the channel). The write paths (remember, batch_remember, amend that changes content, reflect, import, split) store the morpheme tokens of the content plus numbers of 3 or more digits (`LexicalTokens`, first 2000 characters, long runs without whitespace are not tokenized) joined by spaces into `fragments.content_tokens` (`to_tsvector('simple', ...)`, migration 053) in the same statement. The search turns the query into an OR tsquery with the same tokenization, reads up to 400 matching rows within the key, workspace and agent scope and the search filters, and returns the top 200 of them by `ts_rank_cd`. A query that exceeds `MEMENTO_LEXICAL_TIMEOUT_MS` (default 120 ms) is cancelled and the channel is left out of that request only. `ts_rank_cd` looks only at one document and the query, so data of other keys does not affect the ranking. With embeddings on, the candidates join RRF as the `lexical` layer (weight `lexicalWeightFactor`); with embeddings off, only candidates that no other layer returned are appended to the fallback result. The channel contributes to the ranking only through the RRF input and does not change the recall final score (`computeRecallScore`). The score relative to the best `ts_rank_cd` of that search (`_lexicalScore`) only orders lexical-only candidates, which have no other score, inside the search layer and is removed from responses. Rows whose `content_tokens` is NULL are left out of the channel; `scripts/backfill-content-tokens.mjs` fills them. `LexicalSchema` decides participation: the channel takes part only while a valid GIN index exists; without the column, or with the index missing or invalid, it does not take part (one warning each).
 
@@ -1112,7 +1133,7 @@ A narrative reconstruction engine that groups fragments by case_id, performs str
 | `decision_committed` | Architecture/technology decision committed |
 | `error_observed` | Error observation recorded |
 | `fix_attempted` | Fix attempt made |
-| `verification_passed` | Verification passed (-> CaseRewardBackprop backpropagation +0.15) |
+| `verification_passed` | Verification passed (-> CaseRewardBackprop adds +0.15 x confidence to this event's evidence) |
 | `verification_failed` | Verification failed (-> CaseRewardBackprop backpropagation -0.10) |
 | `case_closed` | Closing event recorded when `amend` changes `resolutionStatus` of a fragment with a case_id to resolved (and it was not resolved before) |
 
@@ -1149,8 +1170,9 @@ Passing `caseMode: true` to the recall tool activates the CaseRecall path. It re
 
 `lib/memory/signals/CaseRewardBackprop.js`. When `verification_passed` or `verification_failed` events are inserted into case_events, atomically backpropagates importance to evidence fragments via fragment_evidence. Returns immediately when `MEMENTO_CASE_BACKPROP_ENABLED` is not set to `"true"`.
 
-- `verification_passed` -> evidence fragment `importance += 0.15` (clamped to 1.0 upper bound)
-- `verification_failed` -> evidence fragment `importance -= 0.10` (clamped to 0.0 lower bound)
+- Only the `supports` and `produced_by` evidence linked to that verification event is changed. Evidence of other events in the same case and `contradicts` evidence is left alone. Evidence is recorded with the event in one transaction through the `evidence` field of `CaseEventStore.append`, and the reward runs after commit
+- `verification_passed` -> evidence fragment `importance += 0.15 x confidence` (clamped to 1.0 upper bound). Only evidence with confidence above 0.5 gets `quality_verified=TRUE`
+- `verification_failed` -> evidence fragment `importance -= 0.10 x confidence` (clamped to 0.0 lower bound)
 - Atomic single-query update via PostgreSQL UPDATE ... RETURNING
 
 ---
@@ -1441,9 +1463,9 @@ Files under `lib/memory/` are split into subdirectories by functional domain.
 
 ```
 lib/memory/
-+-- read/          FragmentSearch, FragmentReader, ContextBuilder, GraphNeighborSearch, HistoryReconstructor, Reranker, CaseRecall, LinkedFragmentLoader, RecallSuggestionEngine, SearchScope, SearchSideEffects
++-- read/          FragmentSearch, FragmentReader, ContextBuilder, GraphNeighborSearch, HistoryReconstructor, Reranker, CaseRecall, LinkedFragmentLoader, RecallSuggestionEngine, SearchScope, SearchSideEffects, ContextIndexView, AnchorBudgetLoader, WorkspaceBoundary
 +-- transfer/      exportFormat, FragmentExporter, ImportRunner, ImportReport, importRecords, importErrors, importRuntime
-+-- write/         WriteGate, DedupScope, FragmentImporter, FragmentWriter, FragmentFactory, FragmentStore, RememberPostProcessor, ConflictResolver, BatchRememberProcessor, BatchRememberWorker
++-- write/         WriteGate, DedupScope, FragmentImporter, FragmentWriter, FragmentFactory, FragmentStore, RememberPostProcessor, ConflictResolver, BatchRememberProcessor, BatchRememberWorker, LessonCue
 +-- link/          ReconsolidationEngine, GraphLinker, LinkStore, SessionLinker, TemporalLinker, ContradictionDetector
 +-- consolidate/   MemoryConsolidator, ConsolidatorGC, FragmentGC, decay, UtilityBaseline
 +-- embedding/     EmbeddingWorker, EmbeddingCache, MorphemeIndex, MorphemeTokenizer, LexicalTokens
@@ -1499,7 +1521,7 @@ Three LLM rewriting stages in MemoryConsolidator (`split_long_fragments`, `detec
 
 The ProactiveRecall caseIdPolicy operates as `"strict-or-adjacent"` by default. Only fragment pairs sharing the same case_id or within an adjacent case within 24h are eligible for automatic linking.
 
-autoLinkSessionFragments returns a `linkSuggestions[]` array; ReflectProcessor propagates it via the `_meta.link_suggestions` path.
+autoLinkSessionFragments returns a `linkSuggestions[]` array; ReflectProcessor propagates it via the `_meta.link_suggestions` path. Candidates are picked within the same group by keyword overlap (ties by id), dropped below `MEMENTO_LINK_SUGGEST_MIN_OVERLAP`, and capped at `MEMENTO_LINK_SUGGEST_MAX` per group. The direction of `resolved_by` is uniform: error (`fromId`) to solution (`toId`). The `link` tool, link suggestions and automatic links (procedure–error pairs), case event edges, the resolved-error demotion in `MemoryLinker` (the start point is demoted when it is an error) and `getRCAChain` all use it. Earlier `resolved_by` rows stored from solution to error are still read by `getRCAChain` (procedures only) and by unresolved-branch detection. For error–decision candidates (`caused_by`), `meta.relationHint` points at a `resolved_by` link from the error to the decision. The fragment objects ReflectProcessor passes carry no caseId or sessionId, so automatic link gate (a) does not pass on the reflect path.
 
 ---
 
@@ -1569,7 +1591,7 @@ FragmentSearch focuses solely on pipeline result generation; side effects are ex
 
 `lib/memory/consolidate/MemoryConsolidator.js`. The stage list is declared as a `stageDefs[]` array with `TOTAL_STAGES = stageDefs.length` computed automatically. Adding a new stage requires only pushing one entry; progress calculation and emit are reflected automatically.
 
-Current 22 stages (in order):
+Current 23 stages (in order):
 
 | # | name | Description |
 |---|---|---|
@@ -1588,13 +1610,14 @@ Current 22 stages (in order):
 | 13 | promote_anchors | Anchor promotion |
 | 14 | detect_contradictions | Contradiction detection |
 | 15 | detect_supersessions | Supersede relation detection |
-| 16 | process_pending_contradictions | Pending contradiction processing |
-| 17 | feedback_report | Feedback report generation |
-| 18 | feedback_calibration | Feedback-based calibration |
-| 19 | prune_keyword_indexes | Keyword index cleanup |
-| 20 | collect_stale_fragments | Stale fragment collection |
-| 21 | purge_stale_reflections | Stale reflect purge |
-| 22 | gc_search_events | Search event GC |
+| 16 | build_digests | Build topic timeline and preference profile digests (`MEMENTO_DIGEST`) |
+| 17 | process_pending_contradictions | Pending contradiction processing |
+| 18 | feedback_report | Feedback report generation |
+| 19 | feedback_calibration | Feedback-based calibration |
+| 20 | prune_keyword_indexes | Keyword index cleanup |
+| 21 | collect_stale_fragments | Stale fragment collection |
+| 22 | purge_stale_reflections | Stale reflect purge |
+| 23 | gc_search_events | Search event GC |
 
 ## batchPool / Primary Pool Split
 

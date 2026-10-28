@@ -17,7 +17,7 @@
 | 1000 이상의 정수 | SSE_HEARTBEAT_INTERVAL_MS |
 | 1 이상 65535 이하의 정수 | POSTGRES_PORT, DB_PORT, REDIS_PORT |
 | 0 이상 65535 이하의 정수 | PORT |
-| 0 이상의 정수, 그 밖은 기본값 | MEMENTO_SHUTDOWN_DEADLINE_MS (60000), MEMENTO_SESSION_KEY_RECHECK_MS (30000), MEMENTO_DCR_MAX_PER_HOUR (100), MEMENTO_SCORE_UPDATE_BATCH (200, 10000을 넘으면 10000) |
+| 0 이상의 정수, 그 밖은 기본값 | MEMENTO_CONTEXT_ANCHOR_TOKEN_BUDGET (1000), MEMENTO_SHUTDOWN_DEADLINE_MS (60000), MEMENTO_SESSION_KEY_RECHECK_MS (30000), MEMENTO_DCR_MAX_PER_HOUR (100), MEMENTO_SCORE_UPDATE_BATCH (200, 10000을 넘으면 10000) |
 | 1 이상의 정수, 그 밖은 기본값 | MEMENTO_WM_FALLBACK_MAX_ROWS (2000), MEMENTO_ANCHOR_LIMIT_PER_KEY (1000) |
 | 100 이상 4500 이하의 정수, 그 밖은 2000 | MEMENTO_HEALTH_READY_DB_TIMEOUT_MS |
 | 100 이상 100000 이하의 정수, 그 밖은 4000 | MEMENTO_GC_MAX_DELETE_PER_CYCLE |
@@ -35,6 +35,7 @@
 | off, warn, enforce (그 밖의 값은 warn) | MEMENTO_ANCHOR_PERMISSION |
 | warn, enforce (그 밖의 값은 warn) | MEMENTO_SESSION_ID_POLICY, MEMENTO_RESERVED_AGENT_IDS, MEMENTO_OAUTH_REDIRECT_CHECK |
 | off, warn, enforce (그 밖의 값은 warn) | MEMENTO_WORKSPACE_READ_AUTHZ |
+| warn, reject, allow (그 밖의 값은 warn) | MEMENTO_MISSING_WORKSPACE |
 | reflect, observe, allowlist (그 밖의 값은 observe) | MEMENTO_CORS_MODE |
 | allow, deny (그 밖의 값은 allow) | MEMENTO_SSE_QUERY_KEY |
 | deny (그 밖의 값은 헤더를 붙이지 않음) | MEMENTO_FRAME_OPTIONS |
@@ -46,7 +47,7 @@
 | true, false (그 밖의 값은 `MEMORY_CONFIG` 검증에서 기동 실패) | MEMENTO_AUTO_PROMOTE_ANCHORS (true) |
 | on, off (그 밖의 값은 off) | MEMENTO_ADMIN_AUTH_BACKOFF |
 | 쉼표로 나눈 `id:32바이트 키`(base64 또는 64자 hex), 그 밖은 미설정으로 동작 | MEMENTO_ADMIN_SEAL_KEY |
-| on, off (그 밖의 값은 on) | MEMENTO_WRITE_GATE, MEMENTO_OUTBOX, MEMENTO_OUTBOX_WORKER, MEMENTO_WM_PG_FALLBACK, MEMENTO_RANK_BEFORE_BUDGET, MEMENTO_RANKING_FIX_V2, MEMENTO_GC_THROUGHPUT, MEMENTO_CONTEXT_ANNOTATE, MEMENTO_PROVENANCE, MEMENTO_REVIEW_QUEUE, MEMENTO_HOOK_ENDPOINTS, MEMENTO_FORGET_CASCADE, MEMENTO_EGRESS_POLICY, MEMENTO_AUDIT_DB, MEMENTO_ADMIN_USERS, MEMENTO_LEXICAL_CHANNEL |
+| on, off (그 밖의 값은 on) | MEMENTO_WRITE_GATE, MEMENTO_OUTBOX, MEMENTO_OUTBOX_WORKER, MEMENTO_WM_PG_FALLBACK, MEMENTO_GC_THROUGHPUT, MEMENTO_CONTEXT_ANNOTATE, MEMENTO_PROVENANCE, MEMENTO_REVIEW_QUEUE, MEMENTO_HOOK_ENDPOINTS, MEMENTO_FORGET_CASCADE, MEMENTO_EGRESS_POLICY, MEMENTO_AUDIT_DB, MEMENTO_ADMIN_USERS, MEMENTO_LEXICAL_CHANNEL, MEMENTO_EVENT_TIME_EXTRACT, MEMENTO_DIGEST |
 | mask, reject, off (그 밖의 값은 mask) | MEMENTO_SENSITIVE_SCAN |
 | workspace, key (그 밖의 값은 workspace) | MEMENTO_DEDUP_SCOPE |
 | true, false (false가 아닌 값은 true) | MEMENTO_API_KEY_DELETE_GUARD, MEMENTO_ALLOW_LEGACY_UNBOUND_AGENT_SCOPE, LLM_CONCURRENCY_ENABLED, MCP_REJECT_NONAPIKEY_OAUTH, MEMENTO_DERIVED_FRESHNESS_ENFORCE |
@@ -105,7 +106,7 @@
 | MEMENTO_DECAY_MIN_DELTA | 0 | 감쇠량이 이 값보다 작은 행을 건너뛴다. 마지막 감쇠 후 24시간이 지난 행은 항상 갱신(하한 0.05에 닿은 행은 이 상한 때문에 대략 네 번에 한 번 다시 쓰인다). 숫자가 아니거나 음수인 값은 0으로 처리하고 경고를 남기며 1을 넘는 값은 1로 제한한다. `MEMENTO_SCORE_UPDATE_BATCH`가 0이면 적용하지 않는다 |
 | MEMENTO_UTILITY_MIN_DELTA | 0 | 저장값과의 차이가 이 값 이하인 utility_score를 다시 쓰지 않는다. 숫자가 아니거나 음수인 값은 0으로 처리하고 경고를 남기며 1을 넘는 값은 1로 제한한다. `MEMENTO_SCORE_UPDATE_BATCH`가 0이면 적용하지 않는다 |
 | MEMENTO_GC_THROUGHPUT | on | 만료 파편 정리의 처리량 스위치. `on`이면 정리 단계 `expired_delete`가 후보를 100건 청크로 반복해 주기당 삭제 상한(`MEMENTO_GC_MAX_DELETE_PER_CYCLE`), 시간 예산(`MEMENTO_GC_TIME_BUDGET_MS`), 후보 소진 중 먼저 닿는 것에서 멈춘다. 청크마다 별도 트랜잭션에서 대상 행을 id 오름차순으로 잠근 뒤 잠근 행만 지우며(잠금 대기 상한 3초, 교착과 잠금 대기 초과는 `MEMENTO_DB_LOCK_RETRY_MAX`까지 재실행), 청크가 실패하면 그때까지 지운 수를 돌려주고 다음 주기가 이어간다. 다른 정리 주기나 `forget`이 청크 도중에 대상 행을 먼저 지우면 그 청크가 요청보다 적게 지워 이번 주기가 일찍 끝날 수 있다(안전하며 다음 주기가 이어간다). 청크의 잠금 대기 상한은 `fragment_links`와 버전 행의 연쇄 삭제에도 적용되고, 재시도(`MEMENTO_DB_LOCK_RETRY_MAX`)까지 겹치면 청크 하나가 시간 예산을 넘어 약 12초 더 기다릴 수 있다. `off`이면 주기당 `gc.maxDeletePerCycle`(50)건을 한 문장으로 지운다. 호출 시점에 읽는다 |
-| MEMENTO_GC_MAX_DELETE_PER_CYCLE | 4000 | 만료 파편 정리가 한 주기(`CONSOLIDATE_INTERVAL_MS`, 기본 6시간)에 지우는 최대 건수. 기본값은 30일 일평균 파편 유입(약 1900건)의 두 배 이상이다. 100 이상 100000 이하의 정수만 받고 그 밖은 기본값이다. `MEMENTO_GC_THROUGHPUT=off`이면 쓰지 않는다. 호출 시점에 읽는다 |
+| MEMENTO_GC_MAX_DELETE_PER_CYCLE | 4000 | 만료 파편 정리가 한 주기(`CONSOLIDATE_INTERVAL_MS`, 기본 8시간)에 지우는 최대 건수. 기본값은 30일 일평균 파편 유입(약 1900건)의 두 배 이상이다. 100 이상 100000 이하의 정수만 받고 그 밖은 기본값이다. `MEMENTO_GC_THROUGHPUT=off`이면 쓰지 않는다. 호출 시점에 읽는다 |
 | MEMENTO_GC_TIME_BUDGET_MS | 60000 | 만료 파편 정리 한 주기에서 새 청크를 시작할 수 있는 시간(ms). 청크 하나는 항상 끝까지 실행한다. 1000 이상 600000 이하의 정수만 받고 그 밖은 기본값이다. `MEMENTO_GC_THROUGHPUT=off`이면 쓰지 않는다. 정리 주기가 끝날 때 남은 만료 후보 수(상한 100000에서 세기를 멈추는 근사값)를 `memento_gc_backlog` 게이지에 기록한다. 게이지는 동시에 도는 정리 주기 사이에서 마지막으로 쓴 값이 남고 첫 정리 주기 전에는 0이다. 호출 시점에 읽는다 |
 | MEMENTO_RUNTIME | (없음) | `docker`면 Docker 설치로 판정한다 |
 | GITHUB_TOKEN | (없음) | 업데이트 확인 시 GitHub API 인증 토큰 |
@@ -119,7 +120,7 @@
 | RATE_LIMIT_MAX_REQUESTS | 120 | 윈도우 내 IP당 최대 요청 수 |
 | RATE_LIMIT_PER_IP | 30 | IP당 분당 요청 한도 (미인증 요청) |
 | RATE_LIMIT_PER_KEY | 100 | API 키당 분당 요청 한도 (인증된 요청) |
-| CONSOLIDATE_INTERVAL_MS | 21600000 | 자동 유지보수(consolidate) 실행 간격 (ms). 기본 6시간 |
+| CONSOLIDATE_INTERVAL_MS | 28800000 | 자동 유지보수(consolidate) 실행 간격 (ms). 기본 8시간(하루 3회) |
 | MEMENTO_AUTO_PROMOTE_ANCHORS | true | `false`이면 consolidate의 자동 앵커 승격 stage만 건너뜀. 기존 앵커와 다른 stage는 불변 |
 | EVALUATOR_MAX_QUEUE | 100 | MemoryEvaluator 큐 크기 상한 (초과 시 오래된 작업 드롭) |
 | OAUTH_TRUSTED_ORIGINS | (없음) | OAuth redirect_uri 신뢰 도메인 추가 목록 (쉼표 구분, origin 단위). 기본 신뢰 도메인(claude.ai, chatgpt.com, platform.openai.com, copilot.microsoft.com, gemini.google.com)에 추가로 허용할 origin만 지정 |
@@ -141,11 +142,16 @@
 | FRAGMENT_DEFAULT_LIMIT | 5000 | 1 이상의 정수. 값을 읽어 기동 시 검사하지만 처리에는 쓰이지 않는다. API 키 생성의 기본 할당량은 `DEFAULT_FRAGMENT_LIMIT`이 정한다 |
 | DEDUP_BATCH_SIZE | 100 | 시맨틱 중복 제거 배치 크기 |
 | DEDUP_MIN_FRAGMENTS | 5 | dedup 최소 파편 수. 이 수 미만이면 중복 제거를 건너뛴다 |
+| DEDUP_TIME_BUDGET_MS | 1200000 | semantic_dedup 단계의 시간 상한(ms, 60000~86400000). 넘으면 남은 topic은 다음 주기에 처음부터 본다 |
+| MEMENTO_REFLECT_SLOW_LOG_MS | 5000 | reflect 처리 시간이 이 값(ms) 이상이거나 실패하면 단계별 소요 시간(sessionGroups, persist, taskFeedback, autoLink, queueEmbeddings, episodes, evict)을 info 로그 한 줄로 남긴다. 0이면 끈다 |
 | COMPRESS_AGE_DAYS | 30 | 기억 압축 대상 비활성 일수 |
 | COMPRESS_MIN_GROUP | 3 | 압축 그룹 최소 크기. 이 수 미만이면 압축하지 않는다 |
 | MEMENTO_RERANKER_ENABLED | false | in-process 교차 인코더 리랭커 활성화. 기본은 비활성이다. 기본 모델이 영어 전용이라 한국어 코퍼스에서는 끄는 쪽이 낫다. 절제 실험 기준 Recall@1 74%에서 85%, MRR 0.827에서 0.890, p50 561ms에서 126ms로 개선된다. `RERANKER_URL`로 지정한 외부 리랭커는 이 스위치와 무관하게 동작한다 |
 | RERANKER_MODEL | minilm | in-process 리랭커가 활성일 때 쓰는 ONNX 모델. `minilm` (기본값, ~80MB, 영어 전용) 또는 `bge-m3` (~280MB, 다국어). bge-m3는 비영어 판정이 훨씬 낫지만 CPU에서 30건 재정렬에 수 초가 걸리므로 GPU 기반 외부 서비스 뒤에서만 쓴다 |
 | RERANKER_EXTERNAL_FALLBACK | skip | external 리랭커 3회 연속 실패 시 정책. `skip`(기본): in-process 전환 없이 `RERANKER_EXTERNAL_COOLDOWN_MS` 동안 external 호출 자체를 생략하고 원점수(RRF 순서)를 그대로 반환. `inprocess`: ONNX in-process 모드로 전환(opt-in, 이전 동작) |
+| RERANKER_WINDOW | 30 | 리랭커가 다시 줄 세우는 RRF 상위 후보 수(1~100). 재정렬 시간은 이 값에 비례한다(CPU에서 bge-reranker-v2-m3 30건 약 5초). 줄이면 지연은 줄고 뒤쪽 후보 회수가 약해진다 |
+| RERANKER_TOP_K | 15 | 재정렬 뒤 남기는 파편 수(1~100) |
+| RERANKER_MIN_SCORE | 0 | 재정렬 점수 하한(0~1). 0은 끔. 0보다 크면 재정렬 뒤 `rerankerScore`(sigmoid 점수 × 최신성 보정 0.9~1.1)가 이 값보다 낮은 후보를 결과에서 빼고 searchPath에 `RerankFilter:N`을 남긴다. 관련 없는 후보 때문에 리더가 추측하는 것을 줄인다. 리랭커가 동작할 때만 적용된다. 호출 시점에 읽는다 |
 | RERANKER_TIMEOUT_MS | 5000 | 외부 리랭커 호출 타임아웃(ms) |
 | NLI_SERVICE_URL | (없음) | 외부 NLI 서비스 URL. 미설정 시 in-process ONNX |
 | NLI_TIMEOUT_MS | 5000 | 외부 NLI 호출 타임아웃(ms) |
@@ -162,25 +168,28 @@
 | UPDATE_REQUIRE_SIGNED_TAG | false | `true`로 설정 시 git 설치본 업데이트의 install 단계에 `git verify-tag <대상 태그>`가 checkout 앞에 추가된다. 서명 확인에 실패하면 업데이트가 중단된다 |
 | TRUST_PROXY_HOPS | (없음) | 신뢰하는 리버스 프록시 hop 수. `X-Forwarded-For` 체인의 오른쪽에서 이 수번째 항목을 클라이언트 주소로 채택하고, `0`이면 헤더를 무시하고 소켓 주소를 쓴다. 미설정 시 기존 동작(첫 항목 사용)이며, 이 상태에서 `X-Forwarded-For`를 처음 받으면 `[Proxy]` 경고를 프로세스당 한 번 남기고 관리 `/stats`의 `healthFlags`에 `trust_proxy_hops_unset`이 더해진다. 기동 시 운영 권장 설정 중 빠진 이름은 `[Startup] Recommended settings not applied:` 한 줄로 나열한다. 실제 프록시 단수와 정확히 일치시켜야 하며, 실제보다 크게 잡으면 클라이언트가 보낸 값이 채택된다. 단일 nginx 뒤에서는 `1` |
 | MEMENTO_TOOL_ARGS_VALIDATION | warn | tools/call 인자를 도구의 inputSchema와 대조하는 모드. `off`: 점검 생략, `warn`: 위반을 `[ToolArgs]` 경고 로그(호출자 표기 `key=`, `sid=` 앞 8자, `ua=` 앞 64자 포함)로만 남기고 통과, `enforce`: 위반 시 JSON-RPC `-32602`로 거부. 빈 문자열은 미설정과 같이 `warn`이지만 공백만 있는 값은 잘못된 값이며 `enforce`로 적용된다(`MEMENTO_CONFIG_STRICT=true`이면 기동 시 종료 코드 78). 호출 시점에 읽으므로 재시작 없이 바뀐다 |
+| MEMENTO_MISSING_WORKSPACE | warn | remember, batch_remember, reflect가 인자에도 API 키의 `default_workspace`에도 workspace 없이 올 때의 처리. 이런 파편은 전역으로 저장되어 모든 workspace의 recall에 나온다. `warn`: 저장하고 응답 `_meta.warnings`에 `workspace_missing`을 싣는다, `reject`: JSON-RPC `-32602`로 거부, `allow`: 그대로 저장. `scope=session` remember와 모든 항목에 workspace가 있는 batch_remember는 해당하지 않는다. 호출 시점에 읽는다 |
 | MEMENTO_TOOL_ARGS_ALLOW_UNKNOWN | false | `true`로 설정 시 스키마에 없는 필드를 위반으로 세지 않는다. `enforce` 모드에서 별칭 필드를 쓰는 클라이언트를 수용할 때 쓴다 |
 | MEMENTO_LLM_CLI_ENV_PASSTHROUGH | (없음) | CLI provider(gemini-cli, codex-cli, copilot-cli, qwen-cli, agy-cli, opencode-cli) 자식 프로세스에 추가로 전달할 환경변수 이름(쉼표 구분). 기본으로는 PATH, HOME 등 기본 변수와 CLI별 인증 변수만 전달된다 |
 | MEMENTO_LLM_CLI_TOOL_APPROVAL | none | gemini-cli, copilot-cli, opencode-cli의 도구 실행 승인 방식(`none`, `all`). 호출 시점에 읽으며 그 밖의 값은 `none`으로 처리하고 설정 문제로 기록한다. `none`: gemini는 `-y`를 붙이지 않고, copilot은 `--deny-tool=shell`, `--deny-tool=write`, `--deny-tool=url`, `--disable-builtin-mcps`, `--no-custom-instructions`를 더하며(비대화형 실행에 필요한 `--allow-all-tools`는 유지, 거부 규칙이 항상 우선), opencode는 `OPENCODE_PERMISSION={"*":"deny"}`를 넘기고, gemini는 임시 디렉터리를 신뢰 작업 공간으로 지정하는 `GEMINI_CLI_TRUST_WORKSPACE=true`를 자식 환경에 더한다. 세 CLI 모두 서버 작업 디렉터리가 아닌 빈 임시 디렉터리에서 실행한다(opencode의 `--dir`는 호출자가 지정한 `cwd`가 우선). `all`: gemini `-y`, copilot `--allow-all-tools`만 쓰고 opencode는 승인 관련 설정을 더하지 않으며 서버 작업 디렉터리에서 실행한다. gemini-cli, copilot-cli, opencode-cli를 쓰는 배포는 기본에서 제한된 호출을 받고, `all`로 설정하면 승인 제한이 없는 호출을 쓴다. codex-cli, qwen-cli, agy-cli에는 적용되지 않는다 |
 | MEMENTO_REMEMBER_ATOMIC | false | true 시 remember()의 quota check + INSERT를 단일 트랜잭션으로 원자화. BEGIN → api_keys FOR UPDATE(quota 재검증) → INSERT → COMMIT 순서로 TOCTOU를 완전 차단. false(기본)는 선제 quota check만 수행하며 동시 요청이 드문 환경에 적합 |
 | MEMENTO_REMEMBER_DUPLICATE_GUARD | false | `true`면 remember 중복 적중 시 기존 파편에 후처리, TTL 조정, 재색인을 하지 않고 `existing`, `duplicate`(same_scope, other_workspace, closed, unknown)로 알린다. 동일한 저장 두 건이 경합하면 먼저 들어간 행이 삽입의 충돌 경로에서 importance가 더 큰 값으로 올라가고 접근 시각이 갱신될 수 있다. 같은 범위(같은 workspace 또는 전역 파편) 적중은 이 값과 무관하게 응답에 `duplicate_of`(기존 파편 id)를 싣는다. `other_workspace`는 키 범위 판정(`MEMENTO_DEDUP_SCOPE=key` 또는 키 범위 색인이 남은 상태)에서만 나온다 |
 | MEMENTO_API_KEY_DELETE_GUARD | true | API 키 삭제 전에 그 키의 파편과 재공고화 이력을 확인하고, 있으면 409로 거부한다. `false`면 확인 없이 삭제 |
-| MEMENTO_CASE_BACKPROP_ENABLED | false | true 시 CaseRewardBackprop 활성화. case verification 이벤트마다 증거 파편 importance를 자동 역전파. 비활성 시 호출 자체가 no-op(DB·메트릭 영향 0). DAG 일관성 베이스라인 확보 후 활성화 권장 |
+| MEMENTO_CASE_BACKPROP_ENABLED | false | true 시 CaseRewardBackprop 활성화. 검증 이벤트(`verification_passed` +0.15, `verification_failed` -0.10)마다 그 이벤트에 연결된 `supports`, `produced_by` 근거 파편의 importance에 delta x 근거 confidence를 더한다. 같은 사례의 다른 이벤트 근거와 `contradicts` 근거는 바꾸지 않고, confidence 0.5 이하(검증 전 추론 파편이 낸 근거) 근거는 `quality_verified`를 받지 않는다. 비활성 시 호출 자체가 no-op(DB·메트릭 영향 0) |
 | MEMENTO_STORAGE | pgvector | 저장소 백엔드 이름. 현재 `pgvector` 하나이며 이 값은 동작에 영향을 주지 않는다. |
-| MEMENTO_RANK_BEFORE_BUDGET | on | recall 예산 선택 스위치. `on`이면 검색 계층이 토큰 예산으로 자르지 않은 후보에 연결 파편을 합쳐 최종 점수(`computeRecallScore`)를 매긴 뒤 `tokenBudget` 안에서 고른다. 후보의 정확한 토큰 합이 예산 이하이면 상한 없이 전부 고른다(검색 순서대로 세다가 예산을 넘는 순간 멈추므로 예산이 묶이면 대략 예산만큼만 센다). 예산이 묶이면 후보는 검색 순서 상위 200건과 그 밖에서 검색 순서 절단이 고르는 파편이고, 선택은 토큰 추정값(이 요청에서 정확히 센 수, 저장된 `estimated_tokens`, 없으면 본문 길이 / 4 올림)으로 한다. 추정값은 요청의 입력만으로 정해지고 앞선 요청이 남긴 토큰 수 기억을 쓰지 않으므로 같은 요청은 페이지와 반복 호출에서 같은 결과를 낸다. 저장된 토큰 수는 예산이 묶인 recall마다 검색 순서 앞 600건까지의 id로 한 번 조회한다(`getStoredTokenCounts`, 기본 키 조회 한 번). 선택 방법: 구획(정확 일치, keywords 보조, 연결, 그 밖)마다 남은 예산에 들어가고 최종 점수가 0보다 큰 최고 점수 항목 하나를 먼저 고른 뒤 MMR 이득(관련성 0.7) 대비 토큰이 큰 순서로 채우며, 빈 집합에서 시작한 해와 같은 추정값으로 계산한 검색 순서 절단에서 시작한 해 가운데 최종 점수 합(id 순서 합산)이 큰 쪽을 쓴다. 후보가 210건(200 + 연결 파편 상한)을 넘으면 해를 만들지 않고 검색 순서 절단 결과를 그대로 쓴다(선택 함수 자체의 상한은 600건). 검색 순서 절단의 파편은 정확히 세어 예산에 맞춘 확인된 기준 집합을 만들고, 고른 파편도 정확히 세어 합이 예산을 넘으면 확인된 기준 집합 밖의 파편부터 최종 점수 / 토큰이 가장 작은 것을 뺀다(같으면 점수가 작은 쪽, 그다음 id가 큰 쪽). 고른 해의 정확한 최종 점수 합이 확인된 기준 집합보다 작으면 확인된 기준 집합을 쓴다. 보장은 질의 종류별로 다르다: 태그 없는 검색(keywords 정확 일치와 보조 태그가 없는 경우)은 절단 경계까지 superseded를 포함해 정확히 세므로 확인된 기준 집합이 `off`의 절단과 같고 최종 점수 합이 `off` 이상이다. 태그 검색은 확인된 기준 집합 이상만 보장하며, 저장 토큰 수가 섞인 시드 시험에서 `off` 절단보다 작은 경우가 약 1.2%(692건 중 8건, 모두 superseded 포함 조회)였다. 저장된 토큰 수는 선택에만 쓰고 응답에 싣지 않으며 `off` 경로는 읽지 않는다. 연결 파편은 검색 순서 절단이 고르는 후보를 기준으로 조회하고 예산 안에서 함께 고르며, 예산 선택에 들어간 후보 수와 고른 수를 `search_events.candidate_count`, `budget_kept`(마이그레이션 051)에 기록한다. `off`이면 검색 계층이 정확한 토큰 수로 검색 순서대로 예산을 자른 뒤 연결 파편을 예산 밖에서 더한다. 후보 전체가 예산 안이면 `on`과 `off`의 결과가 같고, 다른 경우는 다음과 같다: 예산이 묶일 때 검색 순서 200위 밖이면서 검색 순서 절단이 고르지 않는 후보는 선택 대상이 아니다, 연결 파편도 예산을 쓰므로 검색 후보만 예산 안이고 연결 파편까지는 넘으면 `on`은 일부를 빼고 `off`는 예산을 넘겨 돌려준다, 캐시를 거쳐 들어온 superseded 파편은 `on`의 `totalTokens`에 들어가지 않는다(`off`는 반환하지 않는 그 파편의 토큰도 센다), `MEMENTO_SYMBOLIC_CBR_FILTER`와 `caseId`를 함께 쓰면 연결 조회 기준이 CBR 필터 앞의 후보다(`off`는 필터 뒤). 마이그레이션 051은 코드보다 먼저 또는 함께 적용한다. 적용 전에는 검색 이벤트가 두 열 없이 기록되고(경고 한 번, 5분마다 열을 다시 확인) 적용하면 재시작 없이 두 열이 채워진다. 호출 시점에 읽는다 |
 | MEMENTO_LEXICAL_CHANNEL | on | 본문 어휘 채널 스위치. `on`이면 본문을 쓰는 저장 경로(remember, batch_remember, 본문을 바꾸는 amend, reflect, 가져오기, 분할)가 본문의 형태소 토큰(MorphemeTokenizer의 한글 형태소, 영문 어간, 한자, 가나 토큰을 소문자로 정리하고 어미 조각을 뺀 것과 3자리 이상 숫자)을 공백으로 이어 `fragments.content_tokens`(마이그레이션 053, `to_tsvector('simple', ...)`)에 같은 문장으로 기록한다. 토큰화는 본문 앞 2000자만 하고, 공백 없이 200자를 넘게 이어진 한글, 한자, 가나 연속이 있는 본문은 토큰화하지 않고 NULL로 둔다(`memento_lexical_tokenize_skipped_total{reason="long_run"}`). 열 확인 질의가 실패하면 토큰 없이 저장한다(`reason="probe_error"`). batch_remember는 트랜잭션을 열기 전에 토큰화한다. 검색 쪽은 recall이 연 검색에서만 동작한다(충돌 탐지, 자동 링크 같은 저장 경로의 내부 검색은 부르지 않는다). 질의를 같은 방법으로 토큰화해 최대 32개 토큰의 OR tsquery(토큰마다 작은따옴표로 감싸고 작은따옴표와 역슬래시는 두 번 쓴다)를 만들고, 키, workspace, agent 범위와 검색 필터(type, topic, caseId, resolutionStatus, phase, affect, isAnchor, timeRange, superseded 포함 여부) 안에서 `content_tokens`가 일치하는 행을 400건까지 읽은 뒤 그 안에서 `ts_rank_cd` 순 상위 200건을 RRF의 `lexical` 계층(가중 `lexicalWeightFactor`)으로 더한다. 읽는 400건은 순서 없이 처음 찾은 행이므로 일치 행이 많으면 순위가 그 표본 안에서 정해진다. 전역 문서 빈도 통계는 쓰지 않으므로 다른 키의 자료가 순위에 영향을 주지 않는다. 질의 하나는 `MEMENTO_LEXICAL_TIMEOUT_MS`를 넘으면 취소되고 그 요청에서만 채널이 빠진다(`memento_lexical_channel_skipped_total{reason}`). 채널은 순위에 RRF 입력으로만 기여하며 recall 최종 점수는 바꾸지 않는다. 임베딩이 꺼진 설치에서는 다른 계층에 없는 어휘 후보만 결과 뒤에 붙는다. `content_tokens`가 NULL인 행(채우기 전의 기존 행)은 채널에서 빠지며 `scripts/backfill-content-tokens.mjs`로 채운다. 채널은 `content_tokens`의 유효한 GIN 색인(이름이 아니라 정의로 찾는다. 기본 이름 `idx_fragments_content_tokens`, `scripts/ops/online-index.mjs`가 만든다)이 있을 때만 참여하고, 열이 없거나 색인이 없거나 무효이면 참여하지 않는다(각 경고 한 번, 상태는 60초마다 다시 읽는다). 열이 있으면 저장 경로는 색인과 무관하게 토큰을 쓴다. garu-ko는 한 음절 형태소를 내지 않으므로 한 음절로만 나뉘는 낱말(예: 이어하기, 백필)은 토큰이 없어 이 채널로 찾지 못한다. 채움 비율은 `memento_lexical_tokens_coverage_ratio`와 `memento_lexical_tokens_missing`(라벨 없음)으로 본다. `off`이면 채널과 기록을 모두 끈다. `off` 동안 저장하거나 본문을 바꾼 행은 NULL이거나 이전 본문의 토큰으로 남으므로 다시 켤 때 백필을 `--restart`로 실행한다. 호출 시점에 읽는다 어휘 채널에서만 찾은 후보(다른 채널이 찾지 않은 후보)는 키워드 일치 항목을 비롯한 다른 채널 후보 뒤에서 순위와 토큰 예산을 받으므로 다른 채널의 상위 결과를 밀어내지 않고 남은 자리만 채운다. |
 | MEMENTO_LEXICAL_TIMEOUT_MS | 120 | 본문 어휘 질의 하나의 시간 상한(ms, 질의 트랜잭션의 `statement_timeout`). 넘으면 그 요청에서 어휘 채널을 빼고 `memento_lexical_channel_skipped_total{reason="timeout"}`에 센다. 10 이상 10000 이하의 정수만 받고 그 밖은 기본값이다. 호출 시점에 읽는다 |
-| MEMENTO_RANKING_FIX_V2 | on | `on`이면 RRF 중복 후보의 의미·어휘·리랭커 증거를 손실 없이 합치고 lexical-only 여부를 음수 점수 대신 별도 순위 계층으로 처리한다. `off`는 긴급 롤백용으로 기존 마지막 값 우선 병합과 감산 순위를 사용한다. 호출 시점에 읽는다 |
 | MEMENTO_KEYWORD_SEMANTIC_FALLBACK | true | `false` 설정 시 text 없는 keywords-only recall의 L3 시맨틱 보조 경로를 비활성화. 활성 시 정규화된 keywords 합성 텍스트 임베딩 1회가 L2와 병렬 수행되어 저장 keywords에 없는 용어도 content 기반으로 회수된다 |
 | MEMENTO_KEYWORD_FALLBACK_TIMEOUT_MS | 1500 | keywords 보조 L3 실행 상한(ms, 100~60000 클램프). 초과 시 빈 결과로 대체하고 searchPath에 `L3kw:timeout`을 남긴다 |
 | MEMENTO_CONTEXT_ANCHOR_LIMIT | 20 | context 응답에 항상 포함되는 앵커(isAnchor) 파편의 전체 최대 개수. 종전 기본값 10에서 20으로 변경되었다. 1~30 범위로 클램프되며 파싱 실패 시 20. 앵커는 tokenBudget 절삭 대상이 아니므로 이 개수 상한이 유일한 주입량 제한이다. 종전 주입량이 필요하면 10으로 설정한다 |
 | MEMENTO_CONTEXT_ANNOTATE | on | context 주입 줄 주석 스위치. `on`이면 `injectionText`의 기억 줄(앵커, core, learning, working) 끝에 ` (YYYY-MM-DD, assertion)`을 붙인다. 날짜는 UTC 기준 저장일(`created_at`, 작업 기억 항목은 추가 시각)이고 상대 날짜는 쓰지 않는다. assertion은 저장된 `assertion_status`가 `observed`, `inferred`, `verified`, `rejected` 중 하나일 때만 싣고, 없으면 날짜만 쓴다. 헤더 문자열(`[ANCHOR MEMORY]`, `[CORE MEMORY]` 등)과 줄 머리 `- `는 바뀌지 않는다. 날짜는 UTC 자정을 경계로 바뀌므로 한국 시각 00:00부터 08:59 사이에 저장한 기억은 전날 날짜로 표시된다(시간대 설정은 없다). `on`이면 비앵커 파편 선택이 기억 줄마다 주석 고정 비용 6(가장 긴 주석 23자를 문자 수 / 4로 올림한 값, `MEMENTO_PROVENANCE=on`이면 출처 꼬리 `, external_content` 18자를 더한 41자의 11)을 더해 `tokenBudget` 안에서 고르므로, 같은 예산에서 고르는 파편이 `off`보다 적을 수 있다. 앵커와 최소 보장 슬롯은 예산과 관계없이 들어간다. `totalTokens`는 본문만 센다. 앵커 응답 파편의 필드는 그대로다. `off`이면 줄이 본문으로 끝난다. 호출 시점에 읽는다 |
 | MEMENTO_CONTEXT_WORKSPACE_ANCHOR_RESERVE | 10 | effective workspace가 있는 context에서 해당 workspace의 importance 상위 anchor에 먼저 예약할 슬롯 수. 미설정 시 total/2를 내림한 값(최대 10)으로 유도되므로 기본 total 20에서는 10, total 10에서는 5다. 명시값은 0 이상 total 이하여야 하며 잘못된 값은 서버 기동 검증에서 실패한다. workspace가 없으면 적용하지 않는다 |
 | MEMENTO_RECALL_MIN_SIM_FLOOR | (없음) | `SearchParamAdaptor.getMinSimilarity`가 반환하는 적응형 임계값에 옵트인 하한을 강제. 예: `0.45` 설정 시 학습값이 0.45 미만이어도 0.45 반환. 미설정 시 기존 동작 그대로 |
+| MEMENTO_RECALL_MIN_SIM_CEIL | (없음) | `SearchParamAdaptor.getMinSimilarity`가 반환하는 적응형 임계값에 옵트인 상한을 강제. 병합 결과 건수(L1/L2/L3/lexical) 평균이 8을 넘으면 학습값이 오르기만 해서 0.60 상한에 고착될 수 있고, 이때 시맨틱 계층에서 정답이 잘린다. 예: `0.40` 설정 시 반환값은 최대 0.40. 하한도 설정되어 있으면 하한이 우선. 미설정 시 기존 동작 그대로 |
 | MIGRATION_LINT_FROM | (없음) | `npm run lint:migrations` 검사 cutoff override. 지정 마이그레이션 번호 이후분만 검사. 미설정 시 전체 검사 |
+| MEMENTO_LINK_SUGGEST_MIN_OVERLAP | 0.4 | reflect 연결 제안의 최소 키워드 겹침(0~1). 미만이면 제안하지 않는다. 0이면 겹침이 없어도 가장 높은 후보를 제안한다 |
+| MEMENTO_LINK_SUGGEST_MIN_MARGIN | 0 | 1위와 2위 후보의 최소 점수 차이(0~1). 차이가 이보다 작으면 모호해서 제안하지 않는다. 0이면 확인하지 않는다 |
+| MEMENTO_LINK_SUGGEST_MAX | 3 | reflect 연결 제안의 그룹당 최대 개수. 0이면 제한하지 않는다 |
 | MEMENTO_MORPHEME_TOKENIZER | local | 형태소 토크나이저 경로 선택. `local`: garu-ko(한글)·natural PorterStemmer(영어)·@node-rs/jieba(중국어)·kuromoji(일본어) 로컬 CPU 분석기 사용(기본). `llm`: LLM 서브프로세스 경로(`MorphemeIndex._tokenizeViaLLM()`)로 전환. |
 | MEMENTO_ENABLE_KUROMOJI | true | `false` 설정 시 kuromoji 일본어 분석기 로딩 생략. 일본어 파편이 없는 환경에서 상주 메모리 약 269MB 절감. `config/memory.js` `morphemeIndex.enableKuromoji`와 동기화됨. |
 | MEMENTO_FEEDBACK_SAMPLING | true | remember·amend·forget 성공 응답에 `feedback_sampled` 힌트를 확률적으로 동봉(`config/memory.js` `feedback.sampling.enabled`). `false` 시 힌트 부착 자체를 생략한다 |
@@ -207,10 +216,14 @@
 | MEMENTO_REVIEW_QUEUE | on | 비차단 검토 대기열 스위치. `on`이면 의미 쓰기 관문이 remember, batch_remember, reflect, amend의 쓰기 중 검토 규칙에 걸린 것을 거부하지 않고 `review_state='pending'`, `review_reason`(사유 목록)으로 저장한다. 규칙은 응답 전에 판정되는 동기 규칙만이다: 본문, 맥락 요약, 목표, 결과, 토픽의 에이전트 지시 덮어쓰기 문구(이전 지시 무시, 시스템 프롬프트 재정의, 대화 형식 표지 같은 좁은 규칙. 일반 절차문은 대상 아님, `instruction_override`), 신뢰 등급 1 이하의 앵커와 preference와 procedure(`low_trust_directive`, 생성만), 앵커 권한 경고 기간에 일반 파편으로 낮춰 저장된 무권한 앵커 요청(`anchor_unauthorized`). 사유는 응답의 `validation_warnings`에 `review.<사유>`로도 실리며 hard gate 거부 대상이 아니다. 검토 대기 파편은 쓴 키의 recall에 `pending_review: true`, `low_trust: true` 표지와 함께 보이고, 다른 키(키 그룹 포함)와 마스터 키의 recall, id 조회, 대체 체인, 연결 확장, topic 제안, ANCHOR와 CORE와 작업 기억 주입, 앵커 자동 승격, 모순 해소에서는 빠진다. 거절 파편도 같은 규칙이라 `includeSuperseded` 조회에서도 쓴 키에게만 보인다(`review_rejected: true`). 키 권한 목록의 `review_off` 표지는 그 키의 표지를 끄고, `review_all`은 그 키의 모든 쓰기를 검토 대기로 둔다(`mode_all`). 표지가 없는 키와 마스터 키는 flagged 방식이다. 비밀과 개인정보는 검토 대상이 아니며 민감 정보 단계에서 먼저 가려지거나 거부되므로 검토 대기 파편에 원문이 남지 않는다. 관리 API `/review`에서 승인(`approved`)하거나 거절(`rejected`, `valid_to` 설정)하며 결정은 `memory_review_decisions`와 감사 기록에 남는다. 승인은 보류한 앵커 요청을 결정 시점 판정(키 권한 목록에 `anchor` 또는 `admin`, 마스터 키는 허용)을 통과할 때만 적용하고, 무권한 앵커 요청(`anchor_unauthorized`)은 관리자가 `applyAnchor: true`를 명시할 때만 적용한다. 30일 동안 결정되지 않은 파편은 자동 거절된다. 열과 표는 migration-057, 058이 더한다. `off`는 새 쓰기에 표지를 다는 일만 멈춘다. 이미 검토 대기나 거절인 파편의 가시성 술어(review_state가 NULL인 행은 모두 통과)와 30일 자동 거절, 대기 파편의 앵커 보류는 그대로다. 완전한 되돌림은 코드 되돌림이며, 이전 판은 `review_off`, `review_all` 표지가 있는 키의 권한 편집을 거부하므로 되돌리기 전에 표지를 지운다. 호출 시점에 읽는다 |
 | MEMENTO_ANCHOR_PERMISSION | warn | 앵커 권한 집행 방식. remember(`isAnchor=true`), batch_remember 항목(`isAnchor=true`), amend(앵커가 아닌 파편을 `isAnchor=true`로 바꾸는 경우)의 앵커 지정은 master 키와 `api_keys.permissions`에 `anchor`(또는 `admin`)가 있는 키만 할 수 있고, 키의 살아 있는 앵커 수가 `MEMENTO_ANCHOR_LIMIT_PER_KEY`에 이르면 더 지정할 수 없다. `warn`이면 그런 요청은 일반 파편으로 저장되고(amend는 is_anchor만 바꾸지 않고 나머지 변경은 반영한다) `validation_warnings`에 `anchorPermissionRequired`, `anchorLimitExceeded`, `anchorLookupFailed` 중 하나가 남으며 `memento_anchor_decision_total{outcome="downgraded"}`가 오른다. 이 경고는 hard gate 키에서도 거부 사유가 아니다. `enforce`이면 같은 요청을 거부한다(remember는 JSON-RPC `-32003`, `error.data.violations`에 같은 규칙 이름. amend는 `policy_violation: <규칙>` 도구 오류 응답. batch_remember는 그 항목만 실패로 돌려준다). 앵커 표시를 내리는 amend는 판정하지 않는다. 지정과 해제 판정은 감사 로그에 `anchor` 줄(진입점, 판정, 사유, 행위자 키)로 남는다. context의 `[ANCHOR MEMORY]` 줄에는 키 이름 대신 비식별 주체 표지(`[k:` + 키 id sha256 앞 4자 `]`, master 앵커는 `[master]`)를 붙이고 응답의 앵커 파편에 같은 값을 `principal`로 싣는다. `off`이면 write 권한만으로 앵커를 지정하고 상한, 경고, 감사 줄, 표지를 적용하지 않는다. `MEMENTO_WRITE_GATE=off`이면 쓰기 판정은 하지 않는다(표지는 이 값을 따른다). 가져오기(소유자 경로)와 서버 내부 경로(자동 앵커 승격, 분할)는 판정하지 않는다. 호출 시점에 읽는다 |
 | MEMENTO_ANCHOR_LIMIT_PER_KEY | 1000 | 키별 살아 있는(`valid_to IS NULL`) 앵커 수 상한. 키의 앵커 수가 이 값에 이르면 그 키의 새 앵커 지정은 `MEMENTO_ANCHOR_PERMISSION`에 따라 일반 파편으로 저장되거나 거부된다. 쓰기 트랜잭션 안에서 키의 `api_keys` 행 잠금 아래 다시 세므로 동시 요청에서도 넘지 않는다. 자동 앵커 승격은 이 상한을 보지 않는다. master 앵커(key_id 없음)와 master 키의 지정에는 적용하지 않는다. 기본값은 출고 시점의 어느 키도 넘지 않도록 정한 값이다. 모든 키에 같은 값을 쓴다. 1 이상의 정수만 받고 그 밖은 기본값이다. 호출 시점에 읽는다 |
+| MEMENTO_CONTEXT_ANCHOR_TOKEN_BUDGET | 1000 | context가 한 번에 주입하는 앵커 본문의 토큰 예산. 앵커는 tokenBudget 절삭에서 빠지고 매 호출 주입되므로 따로 본다. context 응답 `budget.anchor`에 사용량(`used`), 예산(`limit`), 초과 여부(`exceeded`), 순위가 낮은 앵커부터 고른 내릴 후보(`demote_candidates`, 최대 5개)를 싣는다. remember와 amend의 앵커 지정이 같은 키, 같은 workspace의 주입 상위 앵커(`MEMENTO_CONTEXT_ANCHOR_LIMIT`개)에 들어가 합이 예산을 넘으면 `MEMENTO_ANCHOR_TOKEN_BUDGET_MODE`에 따라 처리한다. 0이면 판정하지 않는다. 호출 시점에 읽는다 |
+| MEMENTO_ANCHOR_TOKEN_BUDGET_MODE | warn | 앵커 지정이 `MEMENTO_CONTEXT_ANCHOR_TOKEN_BUDGET`을 넘길 때의 처리. `warn`은 앵커로 저장하고 `validation_warnings`에 `anchorContextBudgetExceeded`(사용량, 예산, 내릴 후보 id)를 싣는다. `reject`는 앵커 지정을 거두고 일반 파편으로 저장하며 같은 경고를 싣는다. `off`는 판정하지 않는다. 판정은 쓰기 트랜잭션 밖의 추정이라 동시 지정에서 예산을 조금 넘을 수 있다. hard gate 거부 사유가 아니다. `MEMENTO_ANCHOR_PERMISSION=off`이면 판정하지 않는다. 호출 시점에 읽는다 |
 | MEMENTO_WM_PG_FALLBACK | on | 작업 기억 PostgreSQL 대체 경로 스위치. `on`이면 Redis가 준비되지 않았을 때 `remember(scope=session)`가 같은 의미 쓰기 관문을 거친 뒤 `fragments`의 작업 기억 행(`source=wm-fallback`, `ttl_tier=short`, `session_id` 지정, 조회 대상에서 빠진 상태)으로 저장된다. `context`의 WORKING 구획, 세션 종합(`reflect`의 `sessionId`), 소비된 항목 제거, 에이전트 삭제가 같은 행을 읽고 지운다. Redis가 준비되어 있어도 같은 세션의 행이 있으면 Redis 항목과 합쳐 읽는다(Redis 쓰기가 실패해 행으로 간 항목, Redis가 끊겼다 돌아온 뒤의 끊긴 동안 쓴 항목). 합칠 때 id가 같거나 같은 에이전트, 키의 같은 본문이면 한 번만 둔다. 이 읽기의 추가 비용은 `idx_fragments_session_id`를 타는 조회 한 번이며 행이 없으면 Redis만 쓴 때와 결과가 같다. 행은 `recall`(닫힌 파편 포함 조회 포함), 그래프 탐색, 통합, 할당량 집계, 관리 화면 집계와 목록, CLI `stats`, 내보내기, 기동 점검 수치에 나타나지 않고, 읽을 때 생성 24시간 이내만 보며, 정리 주기가 24시간 지난 행을 100행씩 별도 트랜잭션으로(잠금 대기 3초, 한 번에 최대 50묶음) 지운다. 정리가 실패해도 일반 파편 정리는 계속된다. 세션 종합(`reflect`의 `sessionId`)은 세션 ID가 같아도 호출한 키(키가 없으면 `key_id`가 없는 항목)와 에이전트(해당 agent와 default) 범위의 항목만 모으고 evict한다(Redis 항목도 같다). master 키도 같아서, `context`의 WORKING 구획은 master에게 세션의 모든 키 항목을 보여 주지만 세션 종합은 `key_id`가 없는 항목만 모은다. `memory_stats`와 원격 CLI `stats` 수치도 이 행을 세지 않는다. 세션 종료 때 지우는 호출자는 없다(Redis 경로와 같다): `reflect`가 소비한 항목은 제거되고 나머지는 24시간 뒤 정리된다. 세션당 보관량은 Redis 경로와 같은 토큰 상한(500)과 행 수 상한(100)으로 줄이고, 키별 상한은 `MEMENTO_WM_FALLBACK_MAX_ROWS`가 정하며 행 수를 먼저 세고 넘는 만큼만 오래된 행부터 지운다. 작업 기억은 DB에 있으므로 여러 서버 프로세스가 공유하고 재시작 뒤에도 남는다. 응답은 `working_memory`(`redis`, `postgres-fallback`, `none`)로 저장 경로를 알리고 대체 경로이면 `_meta.hints`에 `working_memory_fallback`을 싣는다. `off`이면 Redis가 준비되지 않은 동안 `scope=session` 쓰기를 저장하지 않고 `working_memory=none`과 `working_memory_unavailable` 힌트로 알린다. `on`이어도 DB 쓰기를 받지 못하면(풀 없음) 같은 `none`과 힌트로, 저장하지 못했다는 사유를 알린다. 호출 시점에 읽는다 |
 | MEMENTO_WM_FALLBACK_MAX_ROWS | 2000 | 작업 기억 대체 경로의 키별 행 수 상한. 키 하나(키 없는 요청은 한 묶음)의 행이 이 값에 닿으면 새 행을 쓰기 전에 그 키의 가장 오래된 행부터 지운다(거부하지 않는다). 동시 쓰기에서는 잠시 몇 행 넘을 수 있다. 1 이상의 정수만 받고 그 밖은 기본값이다. 호출 시점에 읽는다 |
 | MEMENTO_DEDUP_SCOPE | workspace | 같은 본문(content_hash) 중복 판정 범위. `workspace`이면 키(마스터는 키 없음)와 workspace 단위로 판정한다. 같은 키가 다른 workspace에 같은 본문을 쓰면 별도 파편으로 저장하고, 같은 workspace나 전역(workspace 없음) 파편에 같은 본문이 있으면 그 id를 돌려준다. `key`이면 키 단위로 판정해 다른 workspace의 기존 파편 id를 돌려준다. remember, amend, batch_remember, 가져오기에 함께 적용한다. 키 범위 유일 색인(`uq_frag_hash_per_key`, `uq_frag_hash_master`, 또는 같은 정의의 `fragments_new_key_id_content_hash_idx`, `fragments_new_content_hash_idx`)이 남아 있는 키 경로는(무효 상태 포함) 값과 무관하게 키 범위로 판정한다. 새 설치와 운영 DB 모두 `scripts/ops/finish-dedup-scope.mjs --confirm`으로 그 색인을 지워야 workspace 범위가 된다(전환 절차: [operations/online-migration.md](operations/online-migration.md#중복-판정-범위-전환)). 그 색인을 지운 뒤의 `key`는 사전 조회로만 판정하므로 두 workspace에 같은 본문을 동시에 쓰면 둘 다 저장될 수 있다. 호출 시점에 읽는다 |
 | MEMENTO_FORGET_CASCADE | on | forget 삭제 연쇄 스위치. `on`이면 `forget`(id, topic)이 파편을 지우는 트랜잭션에서 대상(키 범위 안)과, 그 대상을 `linked_to`에 가진 서버 기록 모순 해소 파편(topic `contradiction_audit`, `key_id` 없음)을 id 오름차순으로 잠근 뒤 함께 지우고, 같은 문장에서 지운 파편을 `source_fragment_id`로 가진 `case_events`의 `summary`를 `[삭제됨]`으로 바꾼다. 이벤트 행, 유형, 순서, 엣지는 남는다. 커밋 뒤 지운 id 전체의 `fragment_links` 행과 다른 파편 `linked_to`의 참조를 지운다. 응답에는 `purged`(`case_summaries`: 바꾼 요약 수, `audit_fragments`: 함께 지운 해소 기록 수)가 실린다(삭제 단계까지 간 응답에만, 없음, 권한 없음, permanent 보호 응답에는 없다). 새 모순 해소 기록은 두 파편의 본문 대신 id를 담는다. 요약 조회는 `idx_ce_source_fragment_id`(migration-054)를 쓴다. `off`이면 `forget`이 파편 행과 링크만 지우고 요약과 해소 기록이 남으며, 해소 기록은 두 파편 본문의 앞 80자를 담고 응답에 `purged`가 없다. 원본 파편이 없는 요약(스위치가 꺼진 동안의 `forget`, 만료 정리, 병합이 남긴 요약)은 `scripts/purge-orphan-case-summaries.js`로 정리한다([cli.md](cli.md)). 해소 기록인 대상은 자기 행만 지우고, 해소 기록끼리의 `linked_to`(같은 topic 자동 연결)로는 번지지 않는다. 스위치가 꺼진 동안 기록된 해소 기록은 본문 앞 80자를 담고 가리키는 파편이 지워질 때 함께 지워지며, 가리키던 파편이 이미 지워진 해소 기록은 `linked_to`에서 그 id가 빠져 찾을 수 없으므로 사본이 남는다. 호출 시점에 읽는다 |
+| MEMENTO_EVENT_TIME_EXTRACT | on | 사건 시각 추출 스위치. `on`이면 `eventTime`을 주지 않은 쓰기(remember, batch_remember, reflect와 자동 회고가 만드는 파편)가 본문 앞 2000자의 날짜 표현에서 사건 시각을 뽑아 `fragments.event_time`, `event_time_end`, `event_time_precision`(migration-065)에 저장한다. 규칙 기반이며 LLM을 부르지 않는다. 상대 표현은 `mentionTime`, 없으면 저장 시각 기준으로 해석한다. `off`여도 클라이언트가 준 `mentionTime`, `eventTime`, `eventTimeEnd`는 저장한다. 기존 행은 백필하지 않는다. 호출 시점에 읽는다 |
+| MEMENTO_DIGEST | on | 묶음 요약 스위치. `on`이면 정리 주기의 `build_digests` 단계가 topic 시간선(같은 키, workspace, agent, topic의 유효 파편 5개 이상)과 선호 목록(preference 파편 2개 이상)을 규칙으로 만들어 `fragment_digest`(migration-066)에 두고, recall이 집계, 시간, 상태 의도와 선호 질문에 `_meta.evidence.digests`로 싣는다. LLM을 부르지 않으며 요약은 할당량에 세지 않는다. forget 삭제 연쇄가 지운 파편을 출처로 가진 요약을 함께 지운다. `off`이면 만들지도 싣지도 않는다. 호출 시점에 읽는다 |
 | MEMENTO_LOG_STDERR | false | `true`이면 콘솔 로그를 모든 수준에서 표준 오류로 보낸다. CLI(`bin/memento.js`)는 `serve`를 뺀 명령에서 이 값이 없으면 `true`로 정해 표준 출력을 명령 결과에만 쓴다. 로거가 처음 적재될 때 읽는다 |
 | EPISODE_CONTINUITY_CACHE_TTL_MS | 5000 | EpisodeContinuityService가 스코프(`agentId:keyId:scopeType:scopeValue`)별 최근 milestone 이벤트 ID를 보관하는 in-memory 캐시의 TTL(ms). 삽입 순서 기반 LRU이며 최대 1000개 스코프까지 추적한다 |
 
@@ -642,7 +655,7 @@ detail 규칙: 키 이름이 본문이나 비밀을 가리키면(`content`, `bod
 | CF_API_TOKEN | (없음) | Cloudflare API 토큰. `EMBEDDING_PROVIDER=cloudflare` 시 필수. 미설정 시 `CLOUDFLARE_API_TOKEN`을 대체 이름으로 읽는다 |
 | EMBEDDING_TIMEOUT_MS | 8000 | 임베딩 API 호출 1건당 절대 타임아웃(ms). `AbortSignal.timeout()`으로 적용되며 전체 데드라인 역할을 한다 |
 | EMBEDDING_MAX_RETRIES | 0 | OpenAI 호환 클라이언트의 자체 재시도 횟수. per-call 타임아웃이 이미 절대 데드라인이므로 재시도와 중첩되면 세마포어 점유 시간이 timeout × 재시도로 누적되는 것을 막기 위해 기본 0 |
-| EMBEDDING_CONCURRENCY | 6 | 프로세스 전역 임베딩 호출 동시성 상한. 임베딩 서비스 지연이 전체 요청 큐로 전파되는 것을 차단하는 세마포어 슬롯 수 |
+| EMBEDDING_CONCURRENCY | 6 | 프로세스 전역 임베딩 호출 동시성 상한. 임베딩 서비스 지연이 전체 요청 큐로 전파되는 것을 차단하는 세마포어 슬롯 수. 구간 임베딩 워커와 검색용 질의 임베딩이 같은 슬롯을 쓰므로 `MEMENTO_SEGMENT_CONCURRENCY`를 올릴 때는 이 값을 그보다 충분히 크게 둔다. |
 | EMBEDDING_SEM_WAIT_MS | 3000 | 임베딩 세마포어 슬롯 대기 타임아웃(ms). 초과 시 호출이 reject되고 `mcp_embedding_semaphore_wait_exceeded_total` 카운터가 증가한다 |
 
 ---
@@ -670,7 +683,14 @@ EMBEDDING_DIMENSIONS=384 DATABASE_URL=$DATABASE_URL \
 DATABASE_URL=$DATABASE_URL node scripts/backfill-embeddings.js
 ```
 
-서버 시작 시 `check-embedding-consistency.js`가 DB 벡터 차원과 `EMBEDDING_DIMENSIONS`의 일치 여부를 자동 검증한다. 불일치 시 프로세스를 중단하여 무결성을 보장한다.
+서버 시작 시 `check-embedding-consistency.js`가 두 가지를 검사한다.
+
+| 검사 | 기준 | 어긋나면 |
+|-|-|-|
+| 차원 | DB 벡터 차원 = `EMBEDDING_DIMENSIONS` | 기동 중단 |
+| 모델 | `embedding_profile` 표의 제공자와 모델 = 현재 `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` | 경고만 한다. 차원이 같아도 의미 공간이 달라 검색 품질이 떨어지므로 재임베딩이 필요하다 |
+
+`embedding_profile`이 비어 있으면 첫 기동이 현재 설정을 기록한다. 모델을 바꾸고 재임베딩을 마쳤으면 `node scripts/check-embedding-consistency.js --record`로 프로파일을 갱신한다.
 
 상세 내용: [docs/embedding-local.md](embedding-local.md)
 
@@ -788,7 +808,8 @@ export const MEMORY_CONFIG = {
     maxAgeDays       : 30,       // session_reflect 파편 삭제 기준 (일)
     maxImportance    : 0.55,     // 이 값 미만이면 삭제 대상
     keepPerType      : 5,        // type별 최신 N개 보존
-    maxDeletePerCycle: 30        // 1회 최대 삭제 건수
+    maxDeletePerCycle: 30,       // 1회 최대 삭제 건수
+    slowLogMs        : 5000      // MEMENTO_REFLECT_SLOW_LOG_MS
   },
   semanticSearch: {
     minSimilarity  : 0.4,        // L3 pgvector 검색 최소 유사도 (기본 0.4)
@@ -834,7 +855,7 @@ MemoryConsolidator 자동 실행 전 충분한 변경 누적 여부를 평가하
 | `fragmentsSinceLastRunMin` | `30` | 마지막 실행 이후 새 파편 수가 이 수 이상이면 조건 충족 |
 | `mode` | `"any"` | `"any"`: 3개 조건 중 1개 이상 충족 시 실행. `"all"`: 3개 모두 충족 시 실행. `"off"`: 게이트 비활성화(항상 실행). ENV: `MEMENTO_CONSOLIDATE_GATE_MODE` |
 
-consolidateIntervalMs(기본 6h = 21600000ms) 주기 타이머가 실행될 때마다 이 게이트를 평가한다. 게이트 미통과 시 해당 실행 주기를 건너뛴다. `consolidateIntervalMs`는 `CONSOLIDATE_INTERVAL_MS` 환경변수로 제어한다. proactiveRecall의 caseIdPolicy와 달리 schemaFit.mode는 런타임 변경이 반영되지 않으며 서버 재시작이 필요하다.
+consolidateIntervalMs(기본 8h = 28800000ms) 주기 타이머가 실행될 때마다 이 게이트를 평가한다. 게이트 미통과 시 해당 실행 주기를 건너뛴다. `consolidateIntervalMs`는 `CONSOLIDATE_INTERVAL_MS` 환경변수로 제어한다. proactiveRecall의 caseIdPolicy와 달리 schemaFit.mode는 런타임 변경이 반영되지 않으며 서버 재시작이 필요하다.
 
 ### consolidate.enableRiskyStages
 
@@ -943,7 +964,7 @@ recall은 자체 힌트 경로를 이미 갖고 있어 `rates`에서 제외된�
 | `maxCallsPerMinute` | `MEMENTO_SYNTHETIC_QUERY_RPM` | `20` | 분당 LLM 호출 상한. `0`이면 무제한 |
 | `batchSize` | `MEMENTO_SYNTHETIC_QUERY_BATCH` | `5` | 큐에서 한 번에 꺼내는 수 |
 | `backfillBatch` | `MEMENTO_SYNTHETIC_QUERY_BACKFILL` | `20` | 큐가 비었을 때 회수할 미생성 파편 수 |
-| `adoptLimit` | `MEMENTO_SYNTHETIC_QUERY_ADOPT` | `5` | 한 검색에서 보조 경로로 합류시킬 최대 파편 수 |
+| `adoptLimit` | `MEMENTO_SYNTHETIC_QUERY_ADOPT` | `5` | 한 검색에서 보조 히트가 순위를 바꿀 수 있는 최대 파편 수(새로 합류 + 순위 상승) |
 | `similarityDecay` | - | `0.85` | 보조 히트 유사도 감쇠 계수 |
 | `llmTimeoutMs` | `MEMENTO_SYNTHETIC_QUERY_TIMEOUT_MS` | `20000` | 생성 호출 타임아웃 |
 
@@ -956,9 +977,29 @@ recall은 자체 힌트 경로를 이미 갖고 있어 `rates`에서 제외된�
 - 생성 실패는 파편 저장에 영향을 주지 않는다. 큐 적재 실패도 삼키며, 누락분은 워커의 백필 수집기가 회수한다.
 - 생성된 질의는 원문의 고유명사·식별자·수치를 최소 하나 보존해야 채택된다. 원문에 없던 한자·가나가 섞이면 생성 언어가 흔들린 것으로 보고 버린다.
 - 검색 시 보조 벡터 조회는 본문 벡터 조회와 병렬로 실행된다. 순차로 붙이면 매 검색에 벡터 조회가 하나 더 얹혀 p95 지연이 배가 된다.
-- 보조 히트는 감쇠 계수를 적용한 유사도로 합류하며, 이미 본문 경로가 찾은 파편은 건너뛴다.
+- 보조 히트의 유사도에는 감쇠 계수를 곱한다. 본문 경로가 놓친 파편은 이 유사도로 합류하고, 본문 경로가 이미 찾은 파편은 보조 유사도가 더 높을 때만 그 값으로 순위가 오른다. 본문 후보는 밀려나지 않는다.
+- reflect `lessons`의 상황 단서(cue)도 이 표에 `origin='cue'` 행으로 들어가 같은 경로로 검색된다. cue 행은 생성 스위치(`enabled`)와 관계없이 reflect가 넣고, 본문을 고쳐도 지우지 않는다. 생성 역질의(`origin='generated'`)만 본문이 바뀌면 다시 만든다.
 
 `fragment_synthetic_query`는 `fragments`와 분리된 표다. `QuotaChecker`가 `fragments` 행 수로 `fragment_limit`을 판정하므로 같은 표에 넣으면 사용자 할당량을 잠식한다. 파생 자료이므로 유실 시 백필로 재생성한다.
+
+### segmentEmbedding (구간 임베딩)
+
+최대 1000자인 파편 본문 하나를 벡터 하나로 만들면 곁다리 언급("그런데 방금 smoker를 샀어")이 본문의 주된 화제에 희석되어 질문과 멀어진다. 400자를 넘는 파편을 300자 창(150자 간격)으로 나눠 구간별 벡터를 `fragment_segment` 표에 두고, 시맨틱 검색(L3)에서 조각별 최대 유사도를 본문 후보에 합친다. 구간 유사도에는 감쇠 계수를 곱하고, 구간이 순위에 영향을 주는 조각 수에 상한을 둔다. 기본은 꺼짐이다. 켜기 전에 `npm run migrate`로 표를 만들고, 기존 파편은 `scripts/backfill-fragment-segments.js`로 채운다.
+
+| 키 | 환경변수 | 기본값 | 설명 |
+|-|-|-|-|
+| `enabled` | `MEMENTO_SEGMENT_EMBEDDING_ENABLED` | `false` | 구간 생성. `true`면 워커를 시작하고 임베딩 완료 이벤트마다 큐에 올린다 |
+| `searchEnabled` | `MEMENTO_SEGMENT_SEARCH` | `false` | 검색 반영. 생성 스위치와 독립이며 효과를 보려면 둘 다 `true`로 켠다 |
+| `minChars` | `MEMENTO_SEGMENT_MIN_CHARS` | `400` | 구간 생성 대상의 최소 길이(코드 포인트). 이하는 본문 벡터로 충분하다 |
+| `similarityDecay` | `MEMENTO_SEGMENT_DECAY` | `0.95` | 구간 유사도 감쇠. 짧은 구간 벡터는 코사인이 높게 나오는 경향이 있다 |
+| `adoptLimit` | `MEMENTO_SEGMENT_ADOPT` | `10` | 구간이 순위에 영향을 줄 수 있는 조각(상승 + 신규)의 최대 수 |
+| `searchTimeoutMs` | `MEMENTO_SEGMENT_SEARCH_TIMEOUT_MS` | `1500` | 구간 프로브 시간 예산. 초과하면 본 검색 결과만 쓴다 |
+| `maxSegmentsPerMinute` | `MEMENTO_SEGMENT_RPM` | `600` | 분당 구간 임베딩 상한 |
+| `intervalMs` / `batchSize` | `MEMENTO_SEGMENT_INTERVAL_MS` / `MEMENTO_SEGMENT_BATCH` | `3000` / `10` | 워커 폴링 간격과 회차당 처리 파편 수 |
+| `concurrency` | `MEMENTO_SEGMENT_CONCURRENCY` | `4` | 한 회차 안에서 동시에 임베딩하는 파편 수(1~32) |
+| `recoveryIntervalMs` | `MEMENTO_SEGMENT_RECOVERY_MS` | `600000` | 큐 유실과 정지 구간을 회수하는 복구 스캔 주기(최근 48시간 생성분만 본다) |
+
+구간 표에는 키/에이전트/워크스페이스 열이 없다. 격리는 JOIN한 부모 `fragments`의 열로만 판정한다. 롤백은 두 스위치를 끄는 것이고, 표는 파생 자료라 `DROP TABLE agent_memory.fragment_segment`로 지울 수 있다. 임베딩 차원을 바꾸면 `scripts/post-migrate-flexible-embedding-dims.js`가 이 표도 함께 다룬다.
 
 ### consolidate.gate (정리 안전 게이트)
 
@@ -1387,6 +1428,12 @@ EMBEDDING_DIMENSIONS=768
 | 059 | migration-059-api-key-lifecycle.sql | `api_keys` 수명 열(`expires_at`, `description`, `owner`, `kind`, `allowed_cidrs`, `last_used_ip_hash`, `revoked_at`, `revoked_by`, `revoke_reason`, `access_reviewed_at`, `access_reviewed_by`, 모두 NULL 허용)과 `api_key_secrets` 표(키 해시별 비밀 행, 회전 겹침의 `valid_until`). 배포 뒤 `scripts/ops/backfill-key-secrets.mjs --confirm`으로 현재 키 해시를 옮긴다([operations/online-migration.md](operations/online-migration.md)의 「키 비밀 이관」) |
 | 060 | migration-060-admin-users.sql | `admin_users`, `admin_role_bindings`, `admin_sessions`, `admin_recovery_codes`, `admin_identities` 표(관리자 계정, 역할 바인딩, DB 세션, 복구 코드 해시, OIDC 확장 지점)와 `admin_audit_events.actor_kind`에 `admin` 추가 |
 | 061 | migration-061-synthetic-query-source-version.sql | `fragment_synthetic_query.source_content_hash` 추가. 본문 수정 전 생성된 합성 질의를 검색에서 제외하고 백필로 교체 |
+| 065 | migration-065-fragment-world-time.sql | `fragments`에 nullable 열 `mention_time`, `event_time`, `event_time_end`(timestamptz)와 `event_time_precision`(text)을 더한다. 기존 행은 백필하지 않는다. 색인 `idx_fragments_world_time`(`COALESCE(event_time, mention_time, created_at)`, `valid_to IS NULL` 부분 색인)도 만든다. 쓰기 정지 없이 만들려면 열 추가 문을 먼저 실행하고 `scripts/ops/online-index.mjs`로 색인을 만든 뒤 마이그레이션을 실행한다 |
+| 066 | migration-066-fragment-digest.sql | 묶음 요약 표 `fragment_digest`(key_id, workspace, agent_id, kind, subject, content, source_ids, source_hash, item_count). 범위별 유일 색인, source_ids GIN 색인, fragments와 같은 에이전트·키 격리 RLS 정책 |
+| 067 | migration-067-api-key-tool-calls.sql | `api_key_usage`에 `tool_call_count`(그날 도구 호출 수)와 `tool_calls`(도구별 호출 수, JSONB)를 더한다. 일일 한도 판정에 쓰는 `call_count`는 그대로다 |
+| 068 | migration-068-synthetic-query-origin.sql | `fragment_synthetic_query.origin`(`generated` 기본, `cue`)을 더한다. reflect 교훈의 cue 행은 본문이 바뀌어도 남고, 역질의 백필은 `generated` 행만 보고 대상을 고른다 |
+| 069 | migration-069-embedding-profile.sql | 한 행짜리 표 `embedding_profile`(provider, model, dimensions, recorded_at). 첫 기동이 현재 설정을 기록하고, 이후 기동 검사가 모델 변경을 경고한다 |
+| 070 | migration-070-drop-morpheme-dict-hnsw.sql | `morpheme_dict`의 HNSW 색인 `idx_morpheme_dict_embedding`을 지운다. 형태소 사전은 형태소 키로만 조회하고 벡터 거리 질의가 없다. 색인을 만들지 않으므로 형태소 등록 비용이 줄어든다. `post-migrate-flexible-embedding-dims.js`도 이 표에 색인을 다시 만들지 않는다 |
 
 ---
 

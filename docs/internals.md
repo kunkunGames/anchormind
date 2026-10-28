@@ -137,7 +137,7 @@ memory_consolidate 도구가 실행되거나 서버 내부 스케줄러(6시간 
 4. `gc_preview` — type별 GC 후보 카운트 조회. results.gcCandidatesByType에 Map으로 기록
 5. `split_long_fragments` — 길이 초과 파편 분할
 6. `merge_duplicates` — content_hash 기준 중복 병합. 그룹 키는 `(key_id, workspace, content_hash)`. master 키(key_id IS NULL) 파편은 자동 병합 대상에서 제외. SQL GROUP BY 이후 scope mismatch 어설션 재검증으로 cross-tenant 병합 차단
-7. `semantic_dedup` — topic·key_id 범위 안 KNN cosine >= 0.92 시맨틱 중복 제거
+7. `semantic_dedup` — topic·workspace·key_id 묶음 벡터를 한 번 읽어 모든 쌍의 코사인을 메모리에서 계산하고, 파편마다 정확 top-3 중 cosine >= 0.92 쌍을 게이트를 거쳐 병합한다. 생존자는 (created_at, id)가 큰 쪽이다. 단계 시간이 `DEDUP_TIME_BUDGET_MS`를 넘으면 남은 topic은 다음 주기로 넘긴다
 8. `compress_old_fragments` — 장기 미접근·저중요도 파편 topic별 그룹핑 후 KNN 압축
 9. `embeddings_backfill` — embedding이 NULL인 파편 비동기 임베딩 생성
 10. `retro_link` — GraphLinker.retroLink()로 고립 파편(임베딩 있음, 링크 없음) 최대 20건 소급 자동 링크
@@ -146,13 +146,14 @@ memory_consolidate 도구가 실행되거나 서버 내부 스케줄러(6시간 
 13. `promote_anchors` — access_count >= 10 + importance >= 0.8 파편을 `is_anchor=true`로 승격. `MEMENTO_AUTO_PROMOTE_ANCHORS=false`이면 이 stage만 `disabled_by_config` 사유로 건너뛴다(기본 true).
 14. `detect_contradictions`: 3단계 하이브리드 모순 탐지. pgvector cosine > 0.85 후보 추출 → mDeBERTa NLI → Gemini CLI 에스컬레이션. 모순이면 `contradicts` 링크를 걸고 오래된 쪽의 importance를 절반으로 낮춘 뒤 `superseded_by`로 닫는다. 오래된 쪽이 앵커면 닫지 않는다. 해소 기록은 `contradiction_audit` topic에 남기며 이 topic은 모순·대체 탐지 대상에서 빠진다. 기록 함수는 `MemoryManager`가 `MemoryConsolidator`에 주입한 `rememberAudit` 콜백이며 `ContradictionDetector`는 facade를 import하지 않는다. 콜백이 없거나 기록에 실패해도 해소 결과는 유지된다. 결과는 `nliResolvedDirectly`, `nliSkippedAsNonContra`로 분리 반환
 15. `detect_supersessions`: 임베딩 유사도 0.7~0.85 구간 파편 쌍에 대해 Gemini CLI로 대체 관계 판단. GraphLinker는 유사도만으로 대체 관계를 만들지 않고 0.7 초과 후보를 `related`로만 잇는다. 파편 대체는 이 판정과 remember의 명시 `supersedes` 인자로만 일어난다
-16. `process_pending_contradictions` — Gemini CLI 가용 시 Redis pending 큐에서 최대 10건 꺼내 재판정
-17. `feedback_report` — tool_feedback/task_feedback 집계 리포트 생성. 무관 판정이 1건 이상이면 원인(not_stored/search_miss/scope_leak/topic_mismatch/other/미보고) 분포 표를 덧붙이고, 작업 레벨 통계에는 outcome 분포·outcome 보고 세션 수·human 판정 세션 수·미충족 요구사항 보유 세션 수를 포함한다. outcome 미보고가 있으면 과대 해석 경고를, 성공 비율 100%인데 미보고가 보고보다 많으면 자기보고 편향 주의 문구를 남긴다
-18. `feedback_calibration` — 최근 7일 tool_feedback을 세션별로 집계한 뒤 `feedbackFactor(allRelevant, allSufficient)` 순수함수(lib/memory/consolidate/feedbackFactor.js)로 importance 보정 계수를 결정한다. POSITIVE(allRelevant=true AND allSufficient=true): ×1.1, MIXED(allRelevant=true AND allSufficient=false): ×0.95, NEGATIVE(allRelevant=false): ×0.85. `is_anchor=true` 제외, 클리핑 [0.05, 1.0]
-19. `prune_keyword_indexes` — Redis 고아 키워드 인덱스 제거
-20. `collect_stale_fragments` — 검증 주기 초과 파편 목록 수집, results.stale_fragments에 기록
-21. `purge_stale_reflections`: topic='session_reflect' 파편 중 type별 최신 5개만 보존, 30일 경과 + importance < 0.55인 나머지 삭제(1회 최대 30건)
-22. `gc_search_events` — 오래된 검색 이벤트 GC
+16. `build_digests`: topic별 유효 파편이 5개 이상인 묶음의 시간선과 preference 파편 2개 이상인 묶음의 선호 목록을 규칙으로 만들어 `fragment_digest`(migration-066)에 둔다. LLM을 부르지 않는다. 출처 id와 content_hash로 만든 해시가 같으면 다시 쓰지 않고, 이번 주기에 다시 쓰지 않았으며 출처가 하나라도 유효하지 않은 요약은 지운다. 한 주기에 최근 활동 순 200개 묶음까지 다룬다. `MEMENTO_DIGEST=off`이면 건너뛴다
+17. `process_pending_contradictions` — Gemini CLI 가용 시 Redis pending 큐에서 최대 10건 꺼내 재판정
+18. `feedback_report` — tool_feedback/task_feedback 집계 리포트 생성. 무관 판정이 1건 이상이면 원인(not_stored/search_miss/scope_leak/topic_mismatch/other/미보고) 분포 표를 덧붙이고, 작업 레벨 통계에는 outcome 분포·outcome 보고 세션 수·human 판정 세션 수·미충족 요구사항 보유 세션 수를 포함한다. outcome 미보고가 있으면 과대 해석 경고를, 성공 비율 100%인데 미보고가 보고보다 많으면 자기보고 편향 주의 문구를 남긴다
+19. `feedback_calibration` — 최근 7일 tool_feedback을 세션별로 집계한 뒤 `feedbackFactor(allRelevant, allSufficient)` 순수함수(lib/memory/consolidate/feedbackFactor.js)로 importance 보정 계수를 결정한다. POSITIVE(allRelevant=true AND allSufficient=true): ×1.1, MIXED(allRelevant=true AND allSufficient=false): ×0.95, NEGATIVE(allRelevant=false): ×0.85. `is_anchor=true` 제외, 클리핑 [0.05, 1.0]
+20. `prune_keyword_indexes` — Redis 고아 키워드 인덱스 제거
+21. `collect_stale_fragments` — 검증 주기 초과 파편 목록 수집, results.stale_fragments에 기록
+22. `purge_stale_reflections`: topic='session_reflect' 파편 중 type별 최신 5개만 보존, 30일 경과 + importance < 0.55인 나머지 삭제(1회 최대 30건)
+23. `gc_search_events` — 오래된 검색 이벤트 GC
 
 ### compressOldFragments (KNN 배치 병렬화)
 
@@ -521,6 +522,7 @@ mDeBERTa NLI (in-process ONNX / 외부 HTTP 서비스)
 ```
 
 - **비용 효율**: 99% 후보를 NLI로 처리, LLM 호출은 수치·도메인 모순에만 발생
+- **제시 순서**: LLM에 넘기는 두 파편의 A, B 순서는 id 쌍의 해시로 정한다. 같은 쌍은 늘 같은 순서이고, 새 파편이나 id가 작은 쪽이 늘 A로 가지 않는다
 - **데이터 무손실**: 파편 삭제 대신 temporal 컬럼으로 버전 관리
 - **구현 파일**: `lib/memory/signals/NLIClassifier.js`, `lib/memory/consolidate/MemoryConsolidator.js`
 - **환경변수**: `NLI_SERVICE_URL` 미설정 시 ONNX in-process 자동 사용 (~280MB, 최초 실행 시 다운로드)
@@ -542,11 +544,11 @@ remember() 후처리 파이프라인의 마지막 단계. 저장된 파편의 �
 
 ### CaseRewardBackprop (CaseEventStore -> CaseRewardBackprop)
 
-case_events에 verification 이벤트가 추가되면, 해당 케이스의 증거 파편(fragment_evidence JOIN) importance를 원자적으로 조정한다.
+case_events에 verification 이벤트가 추가되면, 그 이벤트에 연결된 근거 파편(fragment_evidence의 `supports`, `produced_by`)의 importance를 원자적으로 조정한다. 보상량은 `delta x confidence`이고 `contradicts` 근거는 제외한다.
 
-- SQL: `UPDATE fragments SET importance = LEAST(1.0, GREATEST(0.0, importance + $delta)) FROM fragment_evidence, case_events WHERE ...`
+- SQL: `UPDATE fragments f SET importance = LEAST(1.0, GREATEST(0.0, f.importance + $delta * w.confidence)) FROM (SELECT fragment_id, MAX(confidence) ... FROM fragment_evidence WHERE event_id = $1 AND kind IN ('supports','produced_by') GROUP BY fragment_id) w WHERE ...`. 한 파편에 근거 행이 여럿이면 가장 높은 confidence 하나로 한 번만 반영한다
 - 동시성: UPDATE FROM은 행 잠금으로 원자적. read-modify-write race condition 없음.
-- 트리거: `CaseEventStore.append()` COMMIT 후 fire-and-forget
+- 트리거: `CaseEventStore.append()`가 이벤트와 근거를 한 트랜잭션에 기록하고 COMMIT한 뒤 fire-and-forget. 보상이 근거 기록보다 먼저 돌지 않는다
 - 싱글톤: `getBackprop()` (서버 수명 동안 공유)
 - 환경변수: `MEMENTO_CASE_BACKPROP_ENABLED=true`이어야 활성화된다(기본값: false). `lib/config.js`의 `CASE_BACKPROP_ENABLED` 상수로도 참조. 비활성 시 append() 후 backprop 호출이 no-op으로 처리된다.
 
@@ -727,7 +729,7 @@ MCP 2026-07-28 개정을 먼저 시도하는 클라이언트는 400 본문이 �
 `_resolveMode(req, msg, dbDefaultMode, keyId)` 함수가 아래 순서로 mode를 결정한다:
 
 1. `X-Memento-Mode` 요청 헤더 (최우선) — 등록된 프리셋이면 적용, 아니면 null
-2. `initialize` 요청의 `params.mode` 필드
+3. `initialize` 요청의 `params.mode` 필드
 3. `api_keys.default_mode` DB 컬럼 값 (migration-034)
 
 결정된 mode는 세션 객체에 저장되어 이후 모든 요청에 재사용된다.
@@ -799,7 +801,7 @@ Bearer 토큰 원문은 저장하지 않는다. sha256 단축 해시만 키로 �
 
 **세션 재사용 흐름:**
 
-1. `initialize` 요청 수신 시 `deriveTokenKey`로 tokenKey 파생
+2. `initialize` 요청 수신 시 `deriveTokenKey`로 tokenKey 파생
 2. `getSessionIdByToken(tokenKey)` → Redis에서 기존 sessionId 조회
 3. 기존 세션이 유효하면 해당 sessionId로 응답 (새 세션 생성 없음)
 4. 기존 세션이 없거나 만료됐으면 새 세션 생성 후 `bindTokenToSession(tokenKey, sessionId, ttlSec)` 호출

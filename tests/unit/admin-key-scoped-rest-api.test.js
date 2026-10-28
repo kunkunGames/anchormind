@@ -39,10 +39,12 @@ mock.module("../../lib/tools/db.js", {
 /* ── MemoryManager mock ── */
 let mgrCalls = [];
 let mgrError = null;
+let amendResult  = null;
+let forgetResult = null;
 const mgrStub = {
   remember:        (p) => { mgrCalls.push(["remember", p]);        return mgrError ? Promise.reject(mgrError) : Promise.resolve({ success: true, id: "new-frag" }); },
-  amend:           (p) => { mgrCalls.push(["amend", p]);           return mgrError ? Promise.reject(mgrError) : Promise.resolve({ updated: true, fragment: { id: p.id } }); },
-  forget:          (p) => { mgrCalls.push(["forget", p]);          return Promise.resolve(p.dryRun ? { dryRun: true, simulated: { would_delete: true } } : { deleted: 1, protected: 0 }); },
+  amend:           (p) => { mgrCalls.push(["amend", p]);           return mgrError ? Promise.reject(mgrError) : Promise.resolve(amendResult ?? { updated: true, fragment: { id: p.id } }); },
+  forget:          (p) => { mgrCalls.push(["forget", p]);          return Promise.resolve(forgetResult ?? (p.dryRun ? { dryRun: true, simulated: { would_delete: true } } : { deleted: 1, protected: 0 })); },
   recall:          (p) => { mgrCalls.push(["recall", p]);          return Promise.resolve({ fragments: [{ id: "f1" }], searchPath: ["L1:1"], count: 1, totalCount: 1 }); },
   fragmentHistory: (p) => { mgrCalls.push(["fragmentHistory", p]); return Promise.resolve({ current: { id: p.id }, versions: [] }); }
 };
@@ -96,6 +98,8 @@ beforeEach(() => {
   queryResults = [];
   mgrCalls     = [];
   mgrError     = null;
+  amendResult  = null;
+  forgetResult = null;
 });
 
 /* ── GET /keys/:id/stats ── */
@@ -119,9 +123,11 @@ describe("GET /keys/:id/stats", () => {
     assert.equal(body.expiringSoon, 1);
     assert.equal(body.growth7d, 2);
     assert.equal(body.staleRatio30d, 0.4);
-    /** 단일 쿼리만 실행 */
-    assert.equal(queryCalls.length, 1);
+    /** 파편 통계는 집계 한 번, 그 뒤에 사용량 조회 한 번 */
+    assert.equal(queryCalls.length, 2);
     assert.match(queryCalls[0].sql, /FILTER \(WHERE valid_to IS NULL\)/);
+    assert.match(queryCalls[1].sql, /FROM agent_memory\.api_key_usage/);
+    assert.equal(body.usage.toolCalls30d, 0);
   });
 });
 
@@ -186,6 +192,54 @@ describe("GET /memory/graph", () => {
     assert.match(edgeCall.sql, /LIMIT \$2/);
     assert.deepEqual(edgeCall.params[0], ["f1", "f2"]);
     assert.equal(edgeCall.params[1], 60001);
+  });
+});
+
+describe("GET /memory/anomalies", () => {
+  it("파편 개수는 한 문장으로 세고 미해결 모순과 7일 실패 검색 수를 돌려준다", async () => {
+    queryResults = [
+      { rows: [{ total: 9, live: 8, verified: 3, embedding_backlog: 1, quality_pending: 4, stale: 2 }] },
+      { rows: [{ count: 5 }] },
+      { rows: [{ id: 1, result_count: 0 }] },
+      { rows: [{ count: 6 }] }
+    ];
+    const res = fakeRes();
+    await handleMemory({ method: "GET" }, res, makeUrl(`${ADMIN_BASE}/memory/anomalies`));
+
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.qualityUnverified, 4);
+    assert.equal(body.staleFragments, 2);
+    assert.equal(body.failedSearchCount, 5);
+    assert.equal(body.openConflicts, 6);
+    assert.equal(body.failedSearches.length, 1);
+    assert.ok(!("possibleSupersessions" in body));
+    assert.equal(queryCalls.filter(c => /FROM agent_memory\.fragments\s+WHERE/.test(c.sql)).length, 1, "파편 테이블 집계는 한 번");
+    assert.match(queryCalls[0].sql, /COUNT\(\*\) FILTER/);
+    assert.match(queryCalls[3].sql, /resolution\.id IS NULL/);
+  });
+});
+
+describe("GET /memory/conflicts", () => {
+  it("status=open이면 해소 기록이 없고 두 파편이 유효한 모순만 조회한다", async () => {
+    queryResults = [{ rows: [] }];
+    await handleMemory({ method: "GET" }, fakeRes(), makeUrl(`${ADMIN_BASE}/memory/conflicts?status=open`));
+    assert.match(queryCalls[0].sql, /resolution\.id IS NULL/);
+    assert.match(queryCalls[0].sql, /left_fragment\.valid_to IS NULL AND right_fragment\.valid_to IS NULL/);
+  });
+
+  it("status가 없으면 해소한 모순도 조회한다", async () => {
+    queryResults = [{ rows: [] }];
+    await handleMemory({ method: "GET" }, fakeRes(), makeUrl(`${ADMIN_BASE}/memory/conflicts`));
+    assert.doesNotMatch(queryCalls[0].sql, /resolution\.id IS NULL/);
+  });
+});
+
+describe("GET /memory/graph 본문 길이", () => {
+  it("노드 본문은 DB에서 잘라 읽는다", async () => {
+    queryResults = [{ rows: [] }];
+    await handleMemory({ method: "GET" }, fakeRes(), makeUrl(`${ADMIN_BASE}/memory/graph?limit=50`));
+    assert.match(queryCalls[0].sql, /LEFT\(content, 300\) AS content/);
   });
 });
 
@@ -282,6 +336,20 @@ describe("PATCH /memory/fragments/:id", () => {
     assert.equal(res.statusCode, 500);
     assert.deepEqual(JSON.parse(res.body), { error: "Internal error" });
   });
+
+  it("본문이 다른 파편과 겹쳐 병합되면 409와 기존 파편 id로 응답한다", async () => {
+    amendResult = { updated: false, merged: true, existingId: "frag-dup" };
+    const res = await patchWith({ content: "x" });
+    assert.equal(res.statusCode, 409);
+    assert.deepEqual(JSON.parse(res.body), { error: "Content duplicates an existing fragment", code: "duplicate_content", existingId: "frag-dup" });
+  });
+
+  it("소유 키가 아니면 400과 code를 함께 돌려준다", async () => {
+    amendResult = { updated: false, code: "not_owner", error: "Fragment is owned by another API key; only the key that stored it can amend it" };
+    const res = await patchWith({ content: "x" });
+    assert.equal(res.statusCode, 400);
+    assert.equal(JSON.parse(res.body).code, "not_owner");
+  });
 });
 
 /* ── DELETE /memory/fragments/:id ── */
@@ -296,6 +364,37 @@ describe("DELETE /memory/fragments/:id", () => {
     assert.equal(name, "forget");
     assert.equal(params.dryRun, true);
     assert.equal(params.id, "frag-1");
+    assert.equal(params.force, false);
+  });
+
+  it("force=true를 forget에 넘긴다", async () => {
+    const res = fakeRes();
+    await handleMemory(
+      { method: "DELETE" }, res, makeUrl(`${ADMIN_BASE}/memory/fragments/frag-1?force=true`)
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(mgrCalls[0][1].force, true);
+  });
+
+  it("permanent 보호로 지우지 못하면 409로 응답한다", async () => {
+    forgetResult = { deleted: 0, protected: 1, reason: "permanent 파편은 force 옵션 필요" };
+    const res = fakeRes();
+    await handleMemory(
+      { method: "DELETE" }, res, makeUrl(`${ADMIN_BASE}/memory/fragments/frag-1`)
+    );
+    assert.equal(res.statusCode, 409);
+    const body = JSON.parse(res.body);
+    assert.equal(body.code, "permanent_protected");
+    assert.equal(body.deleted, 0);
+  });
+
+  it("이미 없는 파편 삭제는 200으로 응답한다", async () => {
+    forgetResult = { deleted: 0, protected: 0 };
+    const res = fakeRes();
+    await handleMemory(
+      { method: "DELETE" }, res, makeUrl(`${ADMIN_BASE}/memory/fragments/frag-1`)
+    );
+    assert.equal(res.statusCode, 200);
   });
 });
 
@@ -310,6 +409,9 @@ describe("GET /memory/fragments/:id/history", () => {
     assert.equal(res.statusCode, 200);
     assert.equal(mgrCalls[0][0], "fragmentHistory");
     assert.equal(mgrCalls[0][1].id, "frag-1");
+    assert.equal(mgrCalls[0][1].allWorkspaces, true, "workspace 파편 이력도 읽는다");
+    assert.equal(mgrCalls[0][1]._isMaster, true);
+    assert.equal(mgrCalls[0][1].includePeerAgents, true);
   });
 });
 

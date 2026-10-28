@@ -31,7 +31,7 @@ mock.module("../../lib/utils.js", {
   namedExports: { ...realUtils, logAudit: async () => {} }
 });
 
-const isSourceSql = sql => /\bf\.source\b/.test(sql);
+const isSourceSql = sql => /\bf\.source\b/.test(sql) && !/'contradicts'/.test(sql);
 const stubPool = {
   query: async (sql, params) => {
     state.queries.push({ sql, params });

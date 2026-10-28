@@ -426,16 +426,18 @@ async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
 
   if (drainPromises.length > 0) {
     console.log(`[Shutdown] Waiting for ${drainPromises.length} worker(s) to drain (timeout: ${DRAIN_TIMEOUT_MS}ms)...`);
-    const timeout = new Promise(resolve =>
-      setTimeout(() => {
+    let drainTimer;
+    const timeout = new Promise(resolve => {
+      drainTimer = setTimeout(() => {
         console.log("[Shutdown] Worker drain timeout reached, proceeding with shutdown");
         resolve();
-      }, DRAIN_TIMEOUT_MS)
-    );
+      }, DRAIN_TIMEOUT_MS);
+    });
     await Promise.race([
       Promise.allSettled(drainPromises),
       timeout,
     ]);
+    clearTimeout(drainTimer);
     console.log("[Shutdown] Workers drained");
   }
 
@@ -447,6 +449,19 @@ async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
   }
   for (const sessionId of legacyIds) {
     await closeLegacySseSession(sessionId, { preserveRedis: true });
+  }
+
+  /** 3-1. auto-reflect가 새로 남긴 형태소·교훈 cue 등록 대기 (최대 30초) */
+  try {
+    const { MemoryManager } = await import("./lib/memory/MemoryManager.js");
+    let lateDrainTimer;
+    await Promise.race([
+      MemoryManager.getInstance().drainMorpheme(),
+      new Promise(resolve => { lateDrainTimer = setTimeout(resolve, DRAIN_TIMEOUT_MS); })
+    ]);
+    clearTimeout(lateDrainTimer);
+  } catch (err) {
+    console.log(`[Shutdown] late drain skipped: ${err?.message}`);
   }
 
   /** 4. DB/Redis 연결 종료 */

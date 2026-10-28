@@ -481,7 +481,7 @@ async function measure(args) {
   const target = resolveMeasureTarget(args.target, process.env);
   prepareEnvironment(process.env, target, { embeddings });
 
-  const { DB_HOST, DB_PORT, DB_NAME, EMBEDDING_ENABLED, EMBEDDING_PROVIDER, EMBEDDING_MODEL, rankBeforeBudgetEnabled } = await import("../../lib/config.js");
+  const { DB_HOST, DB_PORT, DB_NAME, EMBEDDING_ENABLED, EMBEDDING_PROVIDER, EMBEDDING_MODEL } = await import("../../lib/config.js");
   assertConfigMatchesTarget({ DB_HOST, DB_PORT, DB_NAME }, target);
   if (embeddings === "off" && EMBEDDING_ENABLED) throw new MeasureRefusalError("측정 거부: 임베딩 off 모드인데 임베딩 기능이 켜져 있다.");
 
@@ -518,7 +518,7 @@ async function measure(args) {
     const report = buildReport({
       target,
       embeddings: { mode: embeddings, provider: embeddings === "on" ? EMBEDDING_PROVIDER : null, model: embeddings === "on" ? EMBEDDING_MODEL : null },
-      params    : { token_budget: budgetTokens, page_size: pageSize, query_keywords: keywordMode, include_links: includeLinks ? "on" : "off", rank_before_budget: rankBeforeBudgetEnabled() ? "on" : "off", ndcg_unit_tokens: NDCG_UNIT_TOKENS, subsets: subsets ?? [...SUBSETS], files: dir === DEFAULT_EVAL ? "tests/fixtures/recall-eval-v2" : path.basename(dir), limit: args.limit ? selected.length : null },
+      params    : { token_budget: budgetTokens, page_size: pageSize, query_keywords: keywordMode, include_links: includeLinks ? "on" : "off", ndcg_unit_tokens: NDCG_UNIT_TOKENS, subsets: subsets ?? [...SUBSETS], files: dir === DEFAULT_EVAL ? "tests/fixtures/recall-eval-v2" : path.basename(dir), limit: args.limit ? selected.length : null },
       coverage  : coverageReport(entries),
       labels    : { unlabeled: unlabeled.length, stale_fragments: resolved.stale, excluded_queries: resolved.excluded, holdout_violations: resolved.holdout_violations },
       scored,

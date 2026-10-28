@@ -65,6 +65,25 @@ describe("validateToolArgs 대안 형태와 형식 표기", () => {
     assert.throws(enforce("reflect", { summary: 3 }), /summary: matches none of the allowed forms \(got number\)/);
   });
 
+  it("타입이 맞는 형식의 위반 사유를 함께 적는다", () => {
+    assert.throws(enforce("reflect", { summary: ["s"], lessons: [{ cue: "c", lesson: "l", evidence: "e", confidence: "HIGH" }] }),
+      /lessons\[0\]: matches none of the allowed forms \(got object\): lessons\[0\]\.confidence: must be one of high\|medium\|low/);
+  });
+
+  it("타입이 맞는 형식이 없으면 사유를 붙이지 않는다", () => {
+    assert.throws(enforce("reflect", { summary: ["s"], lessons: [7] }),
+      /lessons\[0\]: matches none of the allowed forms \(got number\)$/);
+  });
+
+  it("문자열 형식의 위반 사유를 적는다", () => {
+    assert.throws(enforce("reflect", { summary: ["s"], lessons: ["SKIP"] }),
+      /lessons\[0\]: matches none of the allowed forms \(got string\): lessons\[0\]: must be one of NO_ENTRY/);
+  });
+
+  it("판정은 바뀌지 않는다: 형식에 맞는 교훈과 NO_ENTRY는 통과한다", () => {
+    assert.doesNotThrow(enforce("reflect", { summary: ["s"], lessons: [{ cue: "c", lesson: "l", evidence: "e" }, "NO_ENTRY"] }));
+  });
+
   it("타입 위반에는 받은 형식을 함께 적는다", () => {
     assert.throws(enforce("remember", { content: "c", topic: "t", type: "fact", keywords: [2026] }),
       /keywords\[0\]: expected string \(got number\)/);
@@ -92,6 +111,31 @@ describe("amend 본문 상한", () => {
       () => r.amend({ id: "frag-0000000000000000", content: "x".repeat(MAX_CONTENT_INPUT_LENGTH + 1) }),
       (e) => e.code === -32602
     );
+    assert.deepEqual(touched, []);
+  });
+});
+
+describe("tool_feedback search_event_id", () => {
+  it("정수와 숫자 문자열은 받고 그 밖의 문자열은 거부한다", () => {
+    const base = { tool_name: "recall", relevant: true, sufficient: true };
+    assert.doesNotThrow(enforce("tool_feedback", { ...base, search_event_id: 42 }));
+    assert.doesNotThrow(enforce("tool_feedback", { ...base, search_event_id: "42" }));
+    assert.throws(enforce("tool_feedback", { ...base, search_event_id: "se-42" }), /search_event_id: matches none/);
+  });
+});
+
+describe("amend 소유 키", () => {
+  it("같은 그룹의 다른 키가 저장한 파편은 수정 전에 not_owner로 거부한다", async () => {
+    const touched = [];
+    const r = new MemoryRememberer({
+      store: {
+        getById: async () => ({ id: "frag-0000000000000000", key_id: "k2", agent_id: "default", content: "c" }),
+        update : async () => { touched.push("update"); return null; }
+      }
+    });
+    const res = await r.amend({ id: "frag-0000000000000000", importance: 0.7, _keyId: "k1", _groupKeyIds: ["k1", "k2"] });
+    assert.equal(res.updated, false);
+    assert.equal(res.code, "not_owner");
     assert.deepEqual(touched, []);
   });
 });

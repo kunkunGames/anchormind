@@ -26,9 +26,23 @@ A client registered through `POST /register` with the API key in an `Authorizati
 
 See [integration guides]() for platform-specific setup.
 
-## Codex Desktop tool discovery
+## Getting Codex to use the memory tools
 
-Some MCP clients, including Codex Desktop, use deferred/lazy tool discovery. Depending on the query and limit, tool_search may show only part of the tool list, so recall can be missing from storage-biased queries with a low limit even though it always exists in tools/list. If recall is not visible, retry with a broader query and limit 20 or above. Recommended: put this retry rule in the agent system prompt/instructions upfront to avoid the initial discovery loop.
+Codex (CLI and Desktop) does not show MCP tools to the model directly; the model has to search the tool list to find them. With only the connection configured, Codex connects to AnchorMind and fetches the tool list every session, but does not call any tool unless the user asks about memory directly ("what did we do last time?"). Set up one of the following.
 
-- query: `memento context recall remember reflect batch_remember search_traces reconstruct_history`
-- limit: 20 or above
+1. Instructions: add this to `~/.codex/AGENTS.md` (all projects) or the project's `AGENTS.md`.
+
+   ```markdown
+   # AnchorMind memory
+
+   The AnchorMind MCP server (`anchormind`) is connected. If its tools are not listed, find them by searching the tools for `anchormind`.
+
+   - At the start of a task, call `context` to load past memory.
+   - Before working on past work, settings or errors, use `recall` to find related memory.
+   - When a decision, the cause and fix of an error, or a user preference is settled, save it with `remember`.
+   - When the task is done, leave a summary with `reflect`. Put lessons worth reusing elsewhere in `lessons` as situation (cue), action (lesson) and evidence.
+   ```
+
+2. Hooks: inject memory at session start and leave a reflection at the end. Follow [Hook Setup](hooks.en.md#codex) or [Plugin Install](plugins.en.md).
+
+When searching the tools, use a broad query (`anchormind context recall remember reflect`) and a limit of 20 or more. Not seeing a tool once does not mean it is missing.

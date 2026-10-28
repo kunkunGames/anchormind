@@ -8,7 +8,10 @@ import {
   paginateRankedFragments
 } from "../../lib/memory/read/DeterministicRanking.js";
 import { mergeHydratedCandidates, mergeRRF } from "../../lib/memory/read/FragmentSearch.js";
-import { MemoryRecaller } from "../../lib/memory/processors/MemoryRecaller.js";
+import { MemoryRecaller as BaseRecaller } from "../../lib/memory/processors/MemoryRecaller.js";
+import { recallerWithSearchStub } from "./_search-candidates-stub.js";
+
+const MemoryRecaller = recallerWithSearchStub(BaseRecaller);
 import { applyRerankerScores } from "../../lib/memory/read/Reranker.js";
 import { teardownTestResources, assertCleanShutdown } from "../_lifecycle.js";
 
@@ -225,6 +228,88 @@ describe("결정 정렬 + offset cursor", () => {
 
     assert.deepEqual([...first.fragments, ...second.fragments].map(fragment => fragment.id), ["a", "b", "c", "d"]);
     assert.deepEqual(scoreRuns[0], scoreRuns[1]);
+  });
+});
+
+describe("토큰 예산과 cursor", () => {
+  const anchorTime = Date.parse("2026-08-31T00:00:00.000Z");
+  const fixture = (count, extra = []) => [
+    ...Array.from({ length: count }, (_, i) => ({
+      id: `f${String(i).padStart(2, "0")}`, type: "fact", content: `body ${i}`, estimated_tokens: 100,
+      rerankerScore: 1 - i / 100, created_at: "2026-01-01T00:00:00.000Z"
+    })),
+    ...extra
+  ];
+  const recallerFor = (rows, seen = new Set()) => new MemoryRecaller({
+    search: {
+      search: async () => ({ fragments: rows.map(row => ({ ...row })), count: rows.length, totalTokens: 0, searchPath: "fixture" })
+    },
+    store: { getLinkedFragments: async () => [] },
+    index: { getSeenIds: async () => seen },
+    suggestionEngine: { suggest: async () => null }
+  });
+  const readAll = async (recaller, args) => {
+    const pages = [];
+    let cursor;
+    do {
+      const page = await recaller.recall({ includeLinks: false, anchorTime, ...args, ...(cursor ? { cursor } : {}) });
+      pages.push(page);
+      cursor = page.nextCursor;
+    } while (cursor && pages.length < 50);
+    return pages;
+  };
+
+  it("예산에 들지 못한 파편은 다음 페이지로 이어지고 각 페이지는 예산 안이다", async () => {
+    const rows  = fixture(12, [{ id: "huge", type: "fact", content: "huge", estimated_tokens: 500, rerankerScore: 2, created_at: "2026-01-01T00:00:00.000Z" }]);
+    const pages = await readAll(recallerFor(rows), { excludeSeen: false, pageSize: 50, tokenBudget: 300 });
+
+    assert.equal(pages.length, 4);
+    for (const page of pages) {
+      assert.ok(page.fragments.reduce((sum, f) => sum + f.estimated_tokens, 0) <= 300);
+      assert.equal(page.totalCount, 12, "혼자서도 예산을 넘는 파편은 세지 않는다");
+    }
+    assert.deepEqual(pages.map(p => p.hasMore), [true, true, true, false]);
+    const ids = pages.flatMap(p => p.fragments.map(f => f.id));
+    assert.deepEqual(ids, rows.slice(0, 12).map(f => f.id));
+  });
+
+  it("pageSize가 예산보다 작으면 남은 결과에서 이어 받는다", async () => {
+    const pages = await readAll(recallerFor(fixture(7)), { excludeSeen: false, pageSize: 2, tokenBudget: 300 });
+
+    assert.deepEqual(pages.map(p => p.fragments.length), [2, 2, 2, 1]);
+    assert.deepEqual(pages.flatMap(p => p.fragments.map(f => f.id)), fixture(7).map(f => f.id));
+  });
+
+  it("다음 호출의 후보 집합이 달라져도 앞 페이지 파편을 다시 돌려주지 않는다", async () => {
+    const rows     = fixture(6);
+    const recaller = recallerFor(rows);
+    const first    = await recaller.recall({ includeLinks: false, excludeSeen: false, anchorTime, pageSize: 50, tokenBudget: 300 });
+    rows.unshift({ id: "late", type: "fact", content: "late", estimated_tokens: 100, rerankerScore: 5, created_at: "2026-01-01T00:00:00.000Z" });
+    const second   = await recaller.recall({ includeLinks: false, excludeSeen: false, pageSize: 50, tokenBudget: 300, cursor: first.nextCursor });
+
+    assert.deepEqual(first.fragments.map(f => f.id), ["f00", "f01", "f02"]);
+    assert.deepEqual(second.fragments.map(f => f.id), ["late", "f03", "f04"]);
+    assert.equal(second.totalCount, 7);
+    assert.equal(second.hasMore, true);
+    assert.doesNotMatch(Buffer.from(second.nextCursor, "base64url").toString(), /f0\d/, "cursor에 원본 id가 드러나지 않는다");
+  });
+
+  it("기존 offset cursor 위치가 결과 수를 넘으면 빈 마지막 페이지다", async () => {
+    const cursor = Buffer.from(JSON.stringify({ offset: 99, anchorTime })).toString("base64url");
+    const page   = await recallerFor(fixture(3)).recall({ includeLinks: false, excludeSeen: false, pageSize: 50, cursor });
+
+    assert.equal(page.count, 0);
+    assert.equal(page.hasMore, false);
+    assert.equal(page.nextCursor, null);
+  });
+
+  it("excludeSeen으로 빠지는 파편은 예산과 totalCount를 차지하지 않는다", async () => {
+    const seen  = new Set(["f00", "f01", "f02"]);
+    const pages = await readAll(recallerFor(fixture(6), seen), { sessionId: "s", pageSize: 50, tokenBudget: 300 });
+
+    assert.equal(pages[0].totalCount, 3);
+    assert.deepEqual(pages[0].fragments.map(f => f.id), ["f03", "f04", "f05"]);
+    assert.equal(pages[0].hasMore, false);
   });
 });
 

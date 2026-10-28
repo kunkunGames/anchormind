@@ -10,6 +10,7 @@
 
 import { beforeEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
+import { recallerWithSearchStub } from "./_search-candidates-stub.js";
 
 function createRedisMock() {
   const sets    = new Map();
@@ -160,7 +161,8 @@ mock.module("../../lib/memory/write/FragmentFactory.js", {
     FragmentFactory: class {
       extractKeywords() { return []; }
     },
-    countTokens: text => Math.max(1, Math.ceil(String(text ?? "").length / 4))
+    countTokens: text => Math.max(1, Math.ceil(String(text ?? "").length / 4)),
+    fragmentTokens: f => f.estimated_tokens || Math.max(1, Math.ceil(String(f.content ?? "").length / 4))
   }
 });
 
@@ -195,7 +197,8 @@ const { FragmentSearch }      = await import("../../lib/memory/read/FragmentSear
 const { SearchScope }         = await import("../../lib/memory/read/SearchScope.js");
 const { fetchGraphNeighbors } = await import("../../lib/memory/read/GraphNeighborSearch.js");
 const { LinkStore }           = await import("../../lib/memory/link/LinkStore.js");
-const { MemoryRecaller }      = await import("../../lib/memory/processors/MemoryRecaller.js");
+const { MemoryRecaller: BaseRecaller } = await import("../../lib/memory/processors/MemoryRecaller.js");
+const MemoryRecaller = recallerWithSearchStub(BaseRecaller);
 
 const NOW = new Date().toISOString();
 
@@ -442,7 +445,7 @@ describe("GraphNeighborSearch SQL 및 최종 RRF 격리", () => {
     assert.deepEqual(params, [["seed"], ["seed"], 10, ["key-1"], "agent-a", "ws-a", "key-1"]);
   });
 
-  it("includePeerAgents=true는 agent 조건만 생략하고 key_id/workspace 조건은 유지한다", async () => {
+  it("includePeerAgents=true는 agent 일치 조건만 생략하고 귀속 불명 파편 제외와 key_id/workspace 조건은 유지한다", async () => {
     await fetchGraphNeighbors(
       ["seed"],
       10,
@@ -574,7 +577,7 @@ describe("LinkStore SQL agent/workspace 격리", () => {
     assert.deepEqual(params, [["seed"], ["key-1"], "agent-a", "ws-a", "key-1"]);
   });
 
-  it("includePeerAgents=true는 agent 조건만 생략하고 key_id/workspace 조건은 유지한다", async () => {
+  it("includePeerAgents=true는 agent 일치 조건만 생략하고 귀속 불명 파편 제외와 key_id/workspace 조건은 유지한다", async () => {
     const store = new LinkStore();
     await store.getLinkedFragments(
       ["seed"],
@@ -586,9 +589,10 @@ describe("LinkStore SQL agent/workspace 격리", () => {
 
     const { sql, params } = vectorQueries.at(-1);
     assert.doesNotMatch(sql, /f\.agent_id = \$/);
+    assert.equal((sql.match(/f\.agent_id IS NOT NULL/g) ?? []).length, 2);
     assert.match(sql, /f\.key_id = ANY\(\$2(::text\[\])?\)/);
-    assert.match(sql, /\(f\.workspace = \$3 OR f\.workspace IS NULL\)/);
-    assert.deepEqual(params, [["seed"], ["key-1"], "ws-a", "key-1"]);
+    assert.match(sql, /\(f\.workspace = \$4 OR f\.workspace IS NULL\)/);
+    assert.deepEqual(params, [["seed"], ["key-1"], "agent-a", "ws-a", "key-1"]);
   });
 
   it("isAnchor=false를 양방향 UNION SQL에 동일하게 적용한다", async () => {

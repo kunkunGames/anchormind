@@ -5,9 +5,9 @@
  * 작성일: 2026-10-03
  *
  * 1. 검색 순서는 낮고 최종 점수는 높은 후보가 예산 안에 남는다.
- * 2. 차등 시험: 시드 생성기로 만든 후보 집합에서 전체 토큰이 예산 이하이면
- *    MEMENTO_RANK_BEFORE_BUDGET=on과 off의 recall 결과(파편, 순서, 필드, 응답 필드)와 접근 기록이 같다.
- * 3. 성질 시험: 예산이 묶이면 on이 고른 파편의 최종 점수 합은 off(검색 순서 절단)의 합 이상이고
+ * 2. 시드 생성기로 만든 후보 집합에서 전체 토큰이 예산 이하이면 검색 순서 절단(FragmentSearch.search)이
+ *    고르는 후보를 모두 고른다.
+ * 3. 성질 시험: 예산이 묶이면 고른 파편의 최종 점수 합은 검색 순서 절단의 합 이상이고
  *    토큰 합은 예산 이하다.
  * 4. 후보는 RANK_CANDIDATE_LIMIT건까지이고, superseded 후보는 예산을 쓰지 않는다.
  */
@@ -42,7 +42,7 @@ mock.module("../../lib/memory/read/Reranker.js", {
 });
 
 const { FragmentSearch }                     = await import("../../lib/memory/read/FragmentSearch.js");
-const { MemoryRecaller, buildRecallScorer }  = await import("../../lib/memory/processors/MemoryRecaller.js");
+const { MemoryRecaller, buildRecallScorer, buildRecallSearchQuery } = await import("../../lib/memory/processors/MemoryRecaller.js");
 const { RANK_CANDIDATE_LIMIT, fragmentTokens, clearTokenCaches } = await import("../../lib/memory/read/BudgetSelector.js");
 const { createRng }                          = await import("../../lib/memory/signals/PairedBootstrap.js");
 
@@ -51,7 +51,6 @@ const DAY    = 86400000;
 const VOCAB  = ["budget", "recall", "token", "rank", "linked", "cache", "index", "query", "score", "memo"];
 
 afterEach(() => {
-  delete process.env.MEMENTO_RANK_BEFORE_BUDGET;
   sideEffectCalls.length = 0;
 });
 
@@ -176,19 +175,35 @@ function randomScenario(seed) {
 }
 
 /**
- * 같은 시나리오를 스위치 값 하나로 실행한다.
+ * 시나리오로 recall을 실행한다.
  *
  * @param {Object} scenario
- * @param {"on"|"off"} mode
  * @param {Object} params
  * @returns {Promise<{result: Object, access: string[][], linkSeeds: string[][], sideEffects: Object[], calls: Object}>}
  */
-async function runWith(scenario, mode, params) {
-  process.env.MEMENTO_RANK_BEFORE_BUDGET = mode;
+async function runRecall(scenario, params) {
   sideEffectCalls.length = 0;
   const { recaller, access, linkSeeds, calls } = buildRecaller(scenario);
   const result = await recaller.recall({ ...params });
   return { result, access, linkSeeds, sideEffects: sideEffectCalls.splice(0), calls };
+}
+
+/**
+ * 같은 시나리오에 recall과 같은 질의로 검색 순서 절단(FragmentSearch.search)만 실행한다. 비교 기준이다.
+ *
+ * @param {Object} scenario
+ * @param {Object} params
+ * @returns {Promise<{result: Object, sideEffects: Object[]}>}
+ */
+async function runSearchOrderCut(scenario, params) {
+  sideEffectCalls.length = 0;
+  const { recaller } = buildRecaller(scenario);
+  const query = buildRecallSearchQuery(params, {
+    fragmentCount: 0, anchorTime: params.anchorTime ?? ANCHOR, agentId: "default",
+    keyId: null, groupKeyIds: null, workspace: null, allWorkspaces: false
+  });
+  const result = await recaller.search.search(query);
+  return { result, sideEffects: sideEffectCalls.splice(0) };
 }
 
 const scoreSum  = (fragments, scoreOf) => fragments.reduce((sum, f) => sum + scoreOf(f), 0);
@@ -210,19 +225,17 @@ describe("recall 순위 후 예산 선택", () => {
     const params  = { keywords: ["budget"], tokenBudget: 100, includeLinks: false, excludeSeen: false, anchorTime: ANCHOR };
     const scoreOf = buildRecallScorer(params, ANCHOR, null);
 
-    const off = await runWith(scenario, "off", params);
-    const on  = await runWith(scenario, "on", params);
+    const off = await runSearchOrderCut(scenario, params);
+    const on  = await runRecall(scenario, params);
 
     assert.deepEqual(off.result.fragments.map(f => f.id), ["rrf-top"]);
     assert.deepEqual(on.result.fragments.map(f => f.id), ["final-top"]);
     assert.ok(scoreSum(on.result.fragments, scoreOf) > scoreSum(off.result.fragments, scoreOf));
     assert.equal(on.calls.candidates, 1);
     assert.equal(on.calls.search, 0);
-    assert.equal(off.calls.search, 1);
-    assert.equal(off.calls.candidates, 0);
   });
 
-  it("검색 이벤트에 예산 선택 후보 수와 선택 수를 넘기고, off는 null을 넘긴다", async () => {
+  it("검색 이벤트에 예산 선택 후보 수와 선택 수를 넘기고, 검색 순서 절단은 null을 넘긴다", async () => {
     const now      = new Date(ANCHOR).toISOString();
     const scenario = {
       makeCombined: () => ["a", "b", "c"].map(id => ({
@@ -232,8 +245,8 @@ describe("recall 순위 후 예산 선택", () => {
     };
     const params = { tokenBudget: 100, includeLinks: false, excludeSeen: false, anchorTime: ANCHOR };
 
-    const on  = await runWith(scenario, "on", params);
-    const off = await runWith(scenario, "off", params);
+    const on  = await runRecall(scenario, params);
+    const off = await runSearchOrderCut(scenario, params);
 
     assert.equal(on.sideEffects.length, 1);
     assert.equal(on.sideEffects[0].ctx.candidateCount, 3);
@@ -243,25 +256,24 @@ describe("recall 순위 후 예산 선택", () => {
     assert.equal(off.sideEffects[0].ctx.budgetKept, null);
   });
 
-  it("후보 전체가 예산 안이면 on과 off의 결과와 접근 기록이 같다(시드 400개)", async () => {
+  it("후보 전체가 예산 안이면 검색 순서 절단이 고르는 후보를 모두 고른다(시드 400개)", async () => {
     let linkedCases = 0;
     for (let seed = 1; seed <= 400; seed++) {
       const scenario = randomScenario(seed);
       const params   = { ...scenario.params, tokenBudget: scenario.totalTokens + (seed % 7) };
 
-      const off = await runWith(scenario, "off", params);
-      const on  = await runWith(scenario, "on", params);
+      const off = await runSearchOrderCut(scenario, params);
+      const on  = await runRecall(scenario, params);
 
-      assert.deepStrictEqual(on.result, off.result, `seed ${seed}: recall 결과가 다르다`);
-      assert.deepStrictEqual(on.access, off.access, `seed ${seed}: 접근 기록이 다르다`);
-      assert.deepStrictEqual(on.sideEffects.map(c => c.ids), off.sideEffects.map(c => c.ids), `seed ${seed}: 검색 이벤트 대상이 다르다`);
+      const sorted = (ids) => [...ids].sort();
+      assert.deepStrictEqual(sorted(on.sideEffects[0].ids), sorted(off.sideEffects[0].ids), `seed ${seed}: 검색 이벤트 대상이 다르다`);
       assert.equal(on.sideEffects[0].ctx.rawResultCount, off.sideEffects[0].ctx.rawResultCount);
       if (params.includeLinks && on.result.fragments.length > on.sideEffects[0].ids.length) linkedCases++;
     }
     assert.ok(linkedCases > 20, `연결 파편이 합류한 시드가 적다: ${linkedCases}`);
   });
 
-  it("예산이 묶이면 토큰 합은 예산 이하이고, 태그 없는 검색이나 모든 후보에 토큰 수가 있으면 on의 최종 점수 합은 off 이상이다(시드 400개)", async () => {
+  it("예산이 묶이면 토큰 합은 예산 이하이고, 태그 없는 검색이나 모든 후보에 토큰 수가 있으면 최종 점수 합은 검색 순서 절단 이상이다(시드 400개)", async () => {
     let bindingCases = 0;
     let strictGains  = 0;
     let taggedMixed  = 0;
@@ -273,11 +285,11 @@ describe("recall 순위 후 예산 선택", () => {
       const scenario = exact
         ? { ...mixed, makeCombined: () => mixed.makeCombined().map(r => ({ ...r, estimated_tokens: fragmentTokens(r) })) }
         : mixed;
-      const params   = { ...scenario.params, includeLinks: false, tokenBudget: 1 + Math.floor(scenario.rowTokens * 0.4) };
+      const params   = { ...scenario.params, includeLinks: false, pageSize: 50, tokenBudget: 1 + Math.floor(scenario.rowTokens * 0.4) };
       const scoreOf  = buildRecallScorer(params, ANCHOR, null);
 
-      const off = await runWith(scenario, "off", params);
-      const on  = await runWith(scenario, "on", params);
+      const off = await runSearchOrderCut(scenario, params);
+      const on  = await runRecall(scenario, params);
 
       const onScore  = scoreSum(on.result.fragments, scoreOf);
       const offScore = scoreSum(off.result.fragments, scoreOf);
@@ -296,16 +308,18 @@ describe("recall 순위 후 예산 선택", () => {
     assert.ok(strictGains > 0, "점수 합이 커진 시드가 하나도 없다");
   });
 
-  it("예산이 묶여도 태그 없는 검색의 연결 기준은 off와 같고, 연결 파편까지 예산 안에서 고른다(시드 200개)", async () => {
+  it("예산이 묶여도 태그 없는 검색의 연결 기준은 검색 순서 절단 결과이고, 연결 파편까지 예산 안에서 고른다(시드 200개)", async () => {
     let linkedRuns = 0;
     for (let seed = 2001; seed <= 2200; seed++) {
       const scenario = randomScenario(seed);
       const params   = { ...scenario.params, includeLinks: true, tokenBudget: 1 + Math.floor(scenario.rowTokens * 0.4) };
 
-      const off = await runWith(scenario, "off", params);
-      const on  = await runWith(scenario, "on", params);
+      const off = await runSearchOrderCut(scenario, params);
+      const on  = await runRecall(scenario, params);
 
-      if (scenario.mode !== "tagged") assert.deepStrictEqual(on.linkSeeds, off.linkSeeds, `seed ${seed}: 연결 기준이 다르다`);
+      if (scenario.mode !== "tagged" && on.linkSeeds.length > 0) {
+        assert.deepStrictEqual(on.linkSeeds[0], off.result.fragments.map(f => f.id).sort(), `seed ${seed}: 연결 기준이 다르다`);
+      }
       assert.ok(tokenSum(on.result.fragments) <= params.tokenBudget, `seed ${seed}: 연결 파편 포함 예산 초과`);
       if (on.linkSeeds.length > 0) linkedRuns++;
     }
@@ -322,16 +336,15 @@ describe("recall 순위 후 예산 선택", () => {
     };
     const base = { includeLinks: false, excludeSeen: false, anchorTime: ANCHOR };
 
-    /** 예산이 묶이고 검색 순서 절단이 상한 안에서 끝나면 후보는 상한 수다 */
-    const binding = await runWith(scenario, "on", { ...base, tokenBudget: 100 });
+    /** 예산이 묶이고 검색 순서 절단이 상한 안에서 끝나면 후보는 상한 수다. 예산은 페이지마다 적용된다 */
+    const binding = await runRecall(scenario, { ...base, tokenBudget: 100 });
     assert.equal(binding.sideEffects[0].ctx.candidateCount, RANK_CANDIDATE_LIMIT);
-    assert.equal(binding.result.totalCount, 100);
+    assert.equal(binding.result.totalCount, RANK_CANDIDATE_LIMIT);
 
-    /** 모두 예산 안이면 검색 순서 절단이 전부를 고르므로 상한 밖 후보도 들어가고 off와 같다 */
-    const onAll  = await runWith(scenario, "on", { ...base, tokenBudget: 100000 });
-    const offAll = await runWith(scenario, "off", { ...base, tokenBudget: 100000 });
+    /** 모두 예산 안이면 검색 순서 절단이 전부를 고르므로 상한 밖 후보도 들어간다 */
+    const onAll  = await runRecall(scenario, { ...base, tokenBudget: 100000 });
     assert.equal(onAll.sideEffects[0].ctx.candidateCount, RANK_CANDIDATE_LIMIT + 50);
-    assert.deepStrictEqual(onAll.result, offAll.result);
+    assert.equal(onAll.result.totalCount, RANK_CANDIDATE_LIMIT + 50);
   });
 
   it("상한 밖까지 이어지는 검색 순서 절단보다 점수 합이 작지 않다(태그 후보 230건)", async () => {
@@ -346,16 +359,16 @@ describe("recall 순위 후 예산 선택", () => {
     const params   = { tokenBudget: 1000, includeLinks: false, excludeSeen: false, anchorTime: ANCHOR, pageSize: 50 };
     const scoreOf  = buildRecallScorer(params, ANCHOR, null);
 
-    const off = await runWith(scenario, "off", params);
-    const on  = await runWith(scenario, "on", params);
+    const off = await runSearchOrderCut(scenario, params);
+    const on  = await runRecall(scenario, params);
 
-    assert.ok(off.sideEffects[0].ids.some(id => id >= "c0200"), "off가 상한 밖 후보를 고르지 않았다");
+    assert.ok(off.sideEffects[0].ids.some(id => id >= "c0200"), "검색 순서 절단이 상한 밖 후보를 고르지 않았다");
     const sumOf = (ids) => ids.reduce((sum, id) => sum + scoreOf(rows.find(r => r.id === id)), 0);
     assert.ok(sumOf(on.sideEffects[0].ids) >= sumOf(off.sideEffects[0].ids) - 1e-9);
     assert.ok(tokenSum(on.sideEffects[0].ids.map(id => rows.find(r => r.id === id))) <= params.tokenBudget);
   });
 
-  it("저장 토큰 수가 실제보다 작아도 정확한 합은 예산 이하이고, 저장값은 응답과 off 경로에 나타나지 않는다", async () => {
+  it("저장 토큰 수가 실제보다 작아도 정확한 합은 예산 이하이고, 저장값은 응답과 검색 순서 절단에 나타나지 않는다", async () => {
     const now  = new Date(ANCHOR).toISOString();
     const rows = Array.from({ length: 40 }, (_, i) => ({
       id: `s${String(i).padStart(3, "0")}`, content: `저장 토큰 수 시험 본문 ${i} `.repeat(3 + (i % 5)), keywords: ["k"],
@@ -366,15 +379,15 @@ describe("recall 순위 후 예산 선택", () => {
     const scenario     = { makeCombined: () => rows.map(r => ({ ...r, keywords: [...r.keywords] })), storedTokens, storedCalls };
     const params       = { tokenBudget: 300, includeLinks: false, excludeSeen: false, anchorTime: ANCHOR, pageSize: 50 };
 
-    const on = await runWith(scenario, "on", params);
-    assert.ok(storedCalls.length === 1 && storedCalls[0].length > 0, "on 경로가 저장 토큰 수를 묻지 않았다");
+    const on = await runRecall(scenario, params);
+    assert.ok(storedCalls.length === 1 && storedCalls[0].length > 0, "예산 선택이 저장 토큰 수를 묻지 않았다");
     assert.ok(tokenSum(on.result.fragments) <= params.tokenBudget);
     assert.equal(on.result.totalTokens, tokenSum(on.result.fragments));
     assert.ok(on.result.fragments.length > 0);
     assert.ok(on.result.fragments.every(f => !("_storedTokens" in f)));
 
     storedCalls.length = 0;
-    const off = await runWith(scenario, "off", params);
+    const off = await runSearchOrderCut(scenario, params);
     assert.equal(storedCalls.length, 0);
     assert.ok(off.result.fragments.every(f => !("_storedTokens" in f)));
   });
@@ -391,30 +404,11 @@ describe("recall 순위 후 예산 선택", () => {
     };
     const params = { tokenBudget: 100, includeLinks: false, excludeSeen: false, anchorTime: ANCHOR };
 
-    const off = await runWith(scenario, "off", params);
-    const on  = await runWith(scenario, "on", params);
+    const off = await runSearchOrderCut(scenario, params);
+    const on  = await runRecall(scenario, params);
 
     assert.deepEqual(off.result.fragments.map(f => f.id), []);
     assert.deepEqual(on.result.fragments.map(f => f.id), ["cur"]);
-  });
-
-  it("searchCandidates가 없는 검색 의존성은 검색 계층 절단 경로를 쓴다", async () => {
-    process.env.MEMENTO_RANK_BEFORE_BUDGET = "on";
-    let searched = 0;
-    const recaller = new MemoryRecaller({
-      search: {
-        search: async () => {
-          searched++;
-          return { fragments: [{ id: "a", content: "a", created_at: new Date(ANCHOR).toISOString() }], count: 1, totalTokens: 1, searchPath: "stub" };
-        }
-      },
-      store           : { getLinkedFragments: async () => [] },
-      index           : { getSeenIds: async () => new Set() },
-      suggestionEngine: { suggest: async () => null }
-    });
-    const result = await recaller.recall({ includeLinks: false, excludeSeen: false, anchorTime: ANCHOR });
-    assert.equal(searched, 1);
-    assert.deepEqual(result.fragments.map(f => f.id), ["a"]);
   });
 
   describe("페이지와 반복 호출의 결정성(토큰 기억 상태와 무관)", () => {
@@ -423,7 +417,7 @@ describe("recall 순위 후 예산 선택", () => {
       const pages = [];
       let cursor;
       do {
-        const page = await runWith(scenario, "on", { ...params, ...(cursor ? { cursor } : {}) });
+        const page = await runRecall(scenario, { ...params, ...(cursor ? { cursor } : {}) });
         pages.push(page.result);
         cursor = page.result.nextCursor;
       } while (cursor && pages.length < 100);
@@ -447,16 +441,16 @@ describe("recall 순위 후 예산 선택", () => {
         const scenario = randomScenario(seed);
         const params   = { ...scenario.params, includeLinks: false, pageSize: 50, tokenBudget: 1 + Math.floor(scenario.rowTokens * 0.4) };
         clearTokenCaches();
-        const fresh = await runWith(scenario, "on", params);
+        const fresh = await runRecall(scenario, params);
         clearTokenCaches();
         /** 같은 본문을 모두 정확히 세는 요청(예산이 넉넉한 off 경로)을 먼저 보낸다 */
-        await runWith(scenario, "off", { ...params, tokenBudget: scenario.totalTokens + 1 });
-        const after = await runWith(scenario, "on", params);
+        await runSearchOrderCut(scenario, { ...params, tokenBudget: scenario.totalTokens + 1 });
+        const after = await runRecall(scenario, params);
         assert.deepStrictEqual(after.result, fresh.result, `seed ${seed}`);
       }
     });
 
-    it("성질: 추정값이 섞인 후보에서 페이지 합집합은 한 번의 전체 호출과 같고 중복이 없으며 반복 호출이 같다(시드 300개)", async () => {
+    it("성질: 추정값이 섞인 후보에서 페이지 합집합은 pageSize와 무관한 같은 집합이고 중복이 없으며 페이지마다 예산 안이고 반복 호출이 같다(시드 300개)", async () => {
       let paged = 0;
       for (let seed = 3101; seed <= 3400; seed++) {
         const scenario = randomScenario(seed);
@@ -465,13 +459,15 @@ describe("recall 순위 후 예산 선택", () => {
 
         clearTokenCaches();
         const pages = await allPages(scenario, { ...base, pageSize: 1 + (seed % 4) });
-        const full  = await runWith(scenario, "on", { ...base, pageSize: 50 });
-        const again = await runWith(scenario, "on", { ...base, pageSize: 50 });
+        const wide  = await allPages(scenario, { ...base, pageSize: 50 });
+        const full  = await runRecall(scenario, { ...base, pageSize: 50 });
+        const again = await runRecall(scenario, { ...base, pageSize: 50 });
 
         const union = pages.flatMap(idsOf);
         assert.equal(new Set(union).size, union.length, `seed ${seed}: 페이지 사이 중복`);
         assert.equal(union.length, pages[0].totalCount, `seed ${seed}: 합집합과 totalCount가 다르다`);
-        if (full.result.totalCount <= 50) assert.deepStrictEqual(union, idsOf(full.result), `seed ${seed}: 페이지와 전체 호출이 다르다`);
+        assert.deepStrictEqual([...union].sort(), wide.flatMap(idsOf).sort(), `seed ${seed}: pageSize에 따라 합집합이 다르다`);
+        for (const page of [...pages, ...wide]) assert.ok(tokenSum(page.fragments) <= budget, `seed ${seed}: 페이지 예산 초과`);
         assert.deepStrictEqual(again.result, full.result, `seed ${seed}: 반복 호출이 다르다`);
         if (pages.length > 1) paged++;
       }

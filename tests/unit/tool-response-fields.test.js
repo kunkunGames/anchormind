@@ -107,6 +107,17 @@ describe("remember 응답", () => {
   });
 });
 
+describe("workspace 누락 경고", () => {
+  test("remember와 reflect가 workspace 없이 오면 _meta.warnings에 workspace_missing을 싣는다", async () => {
+    const remembered = await memory.tool_remember({ content: "내용", topic: "test", type: "fact" });
+    assert.equal(remembered._meta.warnings[0].code, "workspace_missing");
+    const reflected = await memory.tool_reflect({ summary: ["요약"] });
+    assert.equal(reflected._meta.warnings[0].code, "workspace_missing");
+    const scoped = await memory.tool_remember({ content: "내용", topic: "test", type: "fact", workspace: "ws" });
+    assert.equal(scoped._meta?.warnings, undefined);
+  });
+});
+
 describe("recall 응답", () => {
   test("success, count, fragments 배열을 담고 각 파편이 id를 가진다", async () => {
     const res = await memory.tool_recall({ keywords: ["a"] });
@@ -115,6 +126,38 @@ describe("recall 응답", () => {
     assert.ok(Array.isArray(res.fragments));
     assert.equal(res.fragments.length, res.count);
     assert.equal(res.fragments[0].id, FRAGMENT.id);
+  });
+
+  test("연결 파편은 fields 지정과 관계없이 source와 linked_from을 담는다", async () => {
+    const linked = { ...FRAGMENT, id: "frag-0000000000000003", recall_source: "linked", linked_from: FRAGMENT.id };
+    manager.recall = async () => ({ fragments: [FRAGMENT, linked], total: 2, _searchEventId: "se-1" });
+    try {
+      for (const args of [{ keywords: ["a"] }, { keywords: ["a"], fields: ["id", "content"] }]) {
+        const res = await memory.tool_recall(args);
+        assert.equal(res.fragments[0].source, undefined);
+        assert.equal(res.fragments[1].source, "linked");
+        assert.equal(res.fragments[1].linked_from, FRAGMENT.id);
+      }
+    } finally {
+      restoreManager();
+    }
+  });
+
+  test("stale_warning과 workspace_warning은 fields 지정과 관계없이 담는다", async () => {
+    const warned = {
+      ...FRAGMENT,
+      metadata: { stale: true, warning: "[STALE_WARNING] 오래됨", workspace_warning: "[WORKSPACE_SCOPE] 다른 작업 공간" }
+    };
+    manager.recall = async () => ({ fragments: [warned], total: 1, _searchEventId: "se-1" });
+    try {
+      for (const args of [{ keywords: ["a"] }, { keywords: ["a"], fields: ["id", "content"] }]) {
+        const res = await memory.tool_recall(args);
+        assert.equal(res.fragments[0].stale_warning, "[STALE_WARNING] 오래됨");
+        assert.equal(res.fragments[0].workspace_warning, "[WORKSPACE_SCOPE] 다른 작업 공간");
+      }
+    } finally {
+      restoreManager();
+    }
   });
 });
 

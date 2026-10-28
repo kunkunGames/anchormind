@@ -33,10 +33,12 @@ const LIB  = path.resolve(HERE, "..", "..", "lib");
 const ALLOWED = {
   /** 고정 위치 파라미터로 격리를 박은 질의와 격리가 아닌 회계·멤버십 질의 */
   "admin/ApiKeyStore.js": 4, // 키 삭제 전 그 키의 파편, 재공고화 이력 수를 세는 회계 질의 2곳
-  "admin/ApiKeyLifecycleStore.js": 2, // 회전과 폐기가 api_key_secrets 행을 그 키로 고르는 갱신 2곳(기억 격리 조건이 아님)
+  "admin/ApiKeyLifecycleStore.js": 2,
+  "admin/ToolCallUsage.js": 1, // 키별 사용량 회계(api_key_usage)를 그 키 한 개로 읽는다. 기억 격리 조건이 아니다 // 회전과 폐기가 api_key_secrets 행을 그 키로 고르는 갱신 2곳(기억 격리 조건이 아님)
   "admin/admin-keys.js": 1,
   "memory/CaseEventStore.js": 2,
-  "memory/consolidate/MemoryConsolidator.js": 3, // linked_to 교체는 잠금 문장과 갱신 문장이 같은 키 조건을 고정 위치로 쓴다
+  "memory/consolidate/MemoryConsolidator.js": 3,
+  "memory/consolidate/DigestBuilder.js": 1, // 묶음 요약 생성이 GROUP BY로 고른 묶음의 키 값을 고정 위치($1)로 다시 고른다. 접근 격리가 아니라 같은 묶음 재조회다 // linked_to 교체는 잠금 문장과 갱신 문장이 같은 키 조건을 고정 위치로 쓴다
   "memory/link/ContradictionDetector.js": 2,
   "memory/read/FragmentReader.js": 1,
   "memory/read/GraphNeighborSearch.js": 1,

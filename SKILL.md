@@ -2,7 +2,7 @@
 
 AI 에이전트가 AnchorMind 기억 서버를 최대 효율로 활용하기 위한 기술 레퍼런스.
 
-## 현재 버전: v6.2.0
+## 현재 버전: v6.8.1
 
 AnchorMind 서버는 AI 에이전트의 세션 간 장기 기억을 파편(Fragment) 단위로 영속화하고, 16개 도구를 통해 저장·검색·연결·반성 기능을 제공한다. 마스터 키 세션에서는 관리 도구 4종(`memory_stats`, `memory_consolidate`, `check_update`, `apply_update`)이 추가로 노출되어 총 20개가 된다.
 
@@ -13,7 +13,7 @@ AnchorMind 서버는 AI 에이전트의 세션 간 장기 기억을 파편(Fragm
 - 형태소 분석은 로컬 CPU 분석기(`MorphemeTokenizer`)가 담당한다. 한글 garu-ko·영어 PorterStemmer·중국어 @node-rs/jieba·일본어 kuromoji로 라우팅하며, 벤치마크 기준 1.06ms/call 수준이다. `MEMENTO_MORPHEME_TOKENIZER=llm` 설정 시에만 LLM 경로가 활성화된다.
 - 코어 도구는 MCP `title` + `annotations`(readOnlyHint/idempotentHint/openWorldHint) 메타데이터를 포함한다. Codex Desktop 등 deferred/lazy 로딩 클라이언트를 위한 재검색 가이드가 서버 initialize instructions에 포함된다.
 - recall/context/reflect 응답 `_meta`에 `serverTime { iso, epoch_ms, display_kst, timezone }` 필드가 포함되어 LLM 클라이언트가 매 응답마다 서버 현재 시각을 재확인할 수 있다.
-- `tool_reflect` 응답에 `_meta.link_suggestions[]`가 포함된다. 이 목록은 schema-fit gate를 통과하지 못해 자동 링크되지 않은 인과 관계 후보다. LLM은 후보를 검토하여 정당한 인과로 판단되는 항목만 `link(fromId, toId, relationType=...)` 도구로 명시 호출한다.
+- `tool_reflect` 응답에 `_meta.link_suggestions[]`가 포함된다. 이 목록은 schema-fit gate를 통과하지 못해 자동 링크되지 않은 연결 후보다. 키워드 겹침이 기준(기본 0.4) 이상인 후보만 그룹당 최대 3개 실리고, 항목의 `meta.score`는 확률이 아니다. 오류–결정 후보(`caused_by`)는 `meta.relationHint`의 `fromId`, `toId`, `relationType`(오류에서 해결책으로 가는 `resolved_by`)으로 건다. 절차–오류 후보는 후보 그대로(오류에서 절차로 가는 `resolved_by`) 건다. 힌트가 있어도 두 파편의 내용을 읽고 실제로 해결하는지 확인한 뒤 건다. 후보가 없으면 빈 배열이다. LLM은 두 파편의 내용을 읽고 정당한 관계로 판단되는 항목만 `link(fromId, toId, relationType=...)` 도구로 명시 호출한다.
 - recall/context 응답에서 `_meta.serverTime.display_kst` 또는 `_meta.serverTime.iso`로 현재 시점을 재확인하고 파편의 `created_at`·`age_days`와 대조하여 stale 여부를 판단한다. 응답 메타에 명시된 서버 시각이 자체 추정 시각과 다르면 서버 시각이 정답이다.
 - 긴 파편 자동 분할(`splitLongFragments`)은 자식 파편에 본문 기반 keywords를 부여하므로 분할된 내용도 키워드 검색으로 회수된다. 자식 합집합이 원문의 수치 앵커(날짜·금액·비율)를 모두 담지 못하면 분할을 중단하고 원문을 그대로 유지하며, 자식이 남아 있는 원문은 GC 물리 삭제 대상에서 제외된다.
 - 저장소 접근은 `lib/tools/db.js`의 `getPrimaryPool`, `queryWithAgentVector`가 맡는다. `MEMENTO_STORAGE` 환경변수는 저장소 백엔드 이름이며 동작에 영향을 주지 않는다.
@@ -418,6 +418,8 @@ Symbolic Verification Layer는 확률론적 검색 파이프라인 위에 추가
 | `ENABLE_OPENAPI` | boolean | `false` | `true` 설정 시 `/openapi.json` 엔드포인트 활성화. |
 | `SESSION_TTL_MINUTES` | number | `43200` | 세션 TTL(분). OAuth access token 유효 시간도 이 값 × 60초로 산출된다(기본 30일). refresh token 유효 시간은 그 두 배(기본 60일)다. |
 | `MEMENTO_REMEMBER_ATOMIC` | boolean | `false` | `true` 시 remember()의 quota check + INSERT를 단일 트랜잭션으로 원자화(TOCTOU 완전 차단). 동시 요청이 드문 환경에서는 기본값 유지. |
+| `MEMENTO_CONTEXT_ANCHOR_TOKEN_BUDGET` | number | `1000` | context가 한 번에 주입하는 앵커 본문의 토큰 예산. 넘으면 응답 `budget.anchor.exceeded=true`와 내릴 후보를 싣는다. `0`이면 판정하지 않는다. |
+| `MEMENTO_ANCHOR_TOKEN_BUDGET_MODE` | string | `warn` | 예산을 넘기는 새 앵커 지정의 처리. `warn`은 `anchorContextBudgetExceeded` 경고와 내릴 후보를 싣고, `reject`는 앵커 지정을 거둬 일반 파편으로 저장하며, `off`는 판정하지 않는다. |
 | `MEMENTO_CASE_BACKPROP_ENABLED` | boolean | `false` | `true` 시 case verification 이벤트마다 증거 파편 importance를 자동 역전파(CaseRewardBackprop). 비활성 시 no-op. |
 | `MEMENTO_STORAGE` | string | `pgvector` | 저장소 백엔드 이름. 현재 `pgvector` 하나이며 이 값은 동작에 영향을 주지 않는다. |
 | `MIGRATION_LINT_FROM` | string | (없음) | `npm run lint:migrations` cutoff override. 지정 마이그레이션 번호 이후만 검사. |
@@ -544,6 +546,7 @@ reflect(
   errors_resolved=["원인: X -> 해결: Y"],
   new_procedures=["절차1"],
   open_questions=["미해결1"],
+  lessons=[{cue: "적용 상황의 모양", lesson: "할 조작과 대상", evidence: "근거가 된 관찰", confidence: "medium"}],
   workspace="프로젝트명"
 )
 ```
@@ -552,6 +555,7 @@ reflect 규칙:
 - 배열의 각 항목은 독립적으로 이해 가능한 원자적 사실 1건 (1~2문장)
 - 여러 사실을 한 항목에 뭉치지 않는다
 - 관련 파편들이 맥락상 연결되어 있다면 episode 유형 파편을 추가 생성
+- lessons의 cue는 이번 작업의 사실이 아니라 다른 작업에서도 알아볼 상황의 모양으로 쓴다. 근거가 섞여 어느 조치가 효과였는지 가릴 수 없으면 교훈 대신 "NO_ENTRY"를 넣는다
 - contextSummary로 전후관계 요약을 첨부
 - reflect가 새 episode나 파편을 저장하면 같은 workspace(없으면 topic)의 직전 milestone과 preceded_by 엣지가 생성됨 (경험 흐름 그래프 보존). 새로 저장할 내용이 없으면 milestone도 생기지 않음
 - reflect 한 번에 파편 수십 건을 쏟아붓지 않는다. 세션 진행 중 중요한 사실·결정·에러·절차가 확정되는 시점마다 remember로 즉시 개별 저장하고, 세션 종료 시 reflect는 그 세션의 narrative_summary와 open_questions 정리 및 누락분 최종 집계 용도로만 사용한다. 이 분할 저장 패턴이 중요도 가중, 키워드 정밀도, 링크 품질 모두에서 한 번에 몰아 넣는 reflect보다 유의미하게 우수하다.
@@ -646,7 +650,7 @@ remember(content="선호하는 코딩 스타일: ...", topic="preference", type=
 | 깊은 조사 | 3000~5000 | 복잡한 주제, 다수 파편 필요 시 |
 | 에러 디버깅 | 2000 | 에러+해결책+관련 컨텍스트 |
 
-recall은 연결 파편을 포함한 후보에 최종 점수를 매긴 뒤 tokenBudget 안에서 점수가 높은 파편을 고른다(`MEMENTO_RANK_BEFORE_BUDGET=on`, 기본). 연결 파편도 같은 예산을 쓴다. 중요한 정보가 누락되면 tokenBudget을 올려서 재검색.
+recall은 연결 파편을 포함한 후보에 최종 점수를 매긴 뒤 tokenBudget 안에서 점수가 높은 파편을 고른다. 연결 파편도 같은 예산을 쓴다. 중요한 정보가 누락되면 tokenBudget을 올려서 재검색.
 
 ## recall 결과 해석
 
@@ -676,6 +680,7 @@ recall은 연결 파편을 포함한 후보에 최종 점수를 매긴 뒤 token
 - similarity 0.7 이상: 높은 관련성
 - similarity 0.4~0.7: 참고 수준
 - stale_warning: 파편이 오래되었거나 접근 빈도가 낮음. 내용을 재확인하고 필요시 amend나 supersedes로 갱신.
+- workspace_warning: master의 allWorkspaces 조회에서 다른 workspace에 저장된 fact에만 붙는다. 그 workspace에서 확인한 값이므로 지금 작업에 쓰기 전에 다시 확인한다. stale_warning과 함께 `fields` 지정과 관계없이 실린다.
 - searchPath: 어떤 검색 경로가 사용되었는지 확인. L1만 사용됐으면 키워드가 정확히 매칭된 것.
 
 ## 에피소드 기억 활용
@@ -886,6 +891,9 @@ RBAC default-deny: 등록되지 않은 도구 이름은 `Unknown tool: <name>`(-
 | affect | string | - | 감정 태그. neutral(기본) / frustration / confidence / surprise / doubt / satisfaction |
 | idempotencyKey | string | - | 재시도 안전 식별자. 같은 key_id 범위에서 같은 값으로 반복 호출하면 새 파편을 만들지 않고 기존 id를 반환. 권장 형식 {작업명}-{날짜}-{순번} |
 | origin | string | - | 기억의 출처 주장: user_stated, agent_inferred, tool_output, external_content, consolidation, import. 서버는 이 값과 키 상한(권한 `trusted_origin` 또는 master 키 3, 그 밖 2) 중 작은 값으로 신뢰 등급(0~3)을 정한다. 등급 1 이하(external_content 포함)는 context의 ANCHOR와 CORE 주입에서 빠진다. 허용 밖의 값은 -32602. 미지정이면 출처 없음(등급 2). |
+| mentionTime | string | - | 그 내용을 말한 시각(ISO 8601). 지난 대화를 옮겨 저장할 때 원래 시각을 준다. 생략하면 저장 시각. |
+| eventTime | string | - | 내용이 가리키는 사건 시각(YYYY, YYYY-MM, YYYY-MM-DD, ISO 시각, '어제' 같은 날짜 표현). 생략하면 본문의 날짜 표현에서 뽑는다. |
+| eventTimeEnd | string | - | 구간 사건의 끝 시각(ISO 8601). |
 | dryRun | boolean | - | true 시 저장 없이 할당량·충돌 검사 결과와 실행 계획만 반환 |
 
 품질 게이트: content < 10자, URL만, type+topic null인 경우 거부. content > 4000자면 "content length N exceeds max 4000" 메시지와 함께 -32602로 거부(300자 절삭보다 앞단의 수신 게이트). importance < 0.3이면 경고 + TTL short 자동 설정.
@@ -925,10 +933,13 @@ async 사용 지침: 대량(수십~200건) 일괄 저장에서 호출자 대기�
 | linkRelationType | string | - | 연결 관계 필터 (related, caused_by, resolved_by, part_of, contradicts) |
 | threshold | number | - | similarity 임계값 0~1 |
 | includeSuperseded | boolean | - | 만료 파편 포함. 기본 false. |
+| includeHistory | boolean | - | 결과 파편이 대체한 이전 값을 바로 뒤에 state=superseded로 끼우고 대체한 쪽에 state=current를 단다(최대 5건). 값이 어떻게 바뀌었는지 물을 때 쓴다. 기본 false. |
+| order | string | - | rank(기본, 관련도순) 또는 chronological(사건 시각, 없으면 말한 시각, 없으면 저장 시각 오름차순). 사건 순서를 물을 때 쓴다. |
+| intent | string | - | auto(기본), lookup, aggregate, temporal, state. 응답 `_meta.evidence`에 근거 상태(no_evidence, conflicting, partial, supported), 덮이지 않은 질의 낱말, 묶음 의도면 시간순 근거 묶음과 topic 시간선·선호 목록 요약이 실린다. partial이면 uncovered_terms로 다시 찾고, no_evidence면 기억에 없다고 답한다. |
 | includePeerAgents | boolean | - | master 전용. 같은 키/workspace 범위의 다른 agent 파편 포함. 일반 API 키는 권한 오류. 기본 false. |
 | includeKeyName | boolean | X | true 시 각 파편에 key_id·key_name(액세스 키 라벨) 포함. 같은 키 그룹 스코프의 정보만 노출. 팀 공유 workspace에서 파편 생성 주체 식별용. 기본 false |
 | asOf | string | - | ISO 8601. 해당 시점에 가까운 파편을 상위로 올리는 시간 근접 랭킹 기준(anchorTime)으로만 작동. 주의: 그 시점에 유효했던 버전을 복원하는 bitemporal as-of 필터가 아니며, 과거 시점 스냅샷 조회는 미구현. 특정 기간의 파편을 실제로 한정하려면 timeRange를 쓴다. |
-| timeRange | object | - | {from, to} 생성시각(created_at) 기준 시간창 필터. ISO 8601과 한국어 자연어("3일 전","지난 주","오늘") 모두 지원. 지정 시 시간 검색 경로가 동작하고 RRF에서 시간 근접 가중이 부스트된다. |
+| timeRange | object | - | {from, to, basis} 시간창 필터. basis=created(기본)는 생성시각(created_at), basis=event는 사건 시각(event_time, 없으면 mention_time, 없으면 created_at) 기준. ISO 8601과 한국어 자연어("3일 전","지난 주","오늘") 모두 지원. 지정 시 시간 검색 경로가 동작하고 RRF에서 시간 근접 가중이 부스트된다. |
 | cursor | string | - | 페이지네이션 커서 |
 | pageSize | number | - | 기본 20, 최대 50 |
 | excludeSeen | boolean | - | context()에서 주입된 파편 제외. 기본 true. |
@@ -1001,6 +1012,7 @@ fromId 또는 toId가 타 테넌트 소유 파편인 경우 `"Fragment not found
 | resolutionStatus | string | - | 케이스 해결 상태 변경 (open / resolved / abandoned). case_id 보유 파편은 resolved 전환 시 case_closed 이벤트가 자동 기록된다 |
 | outcome | string | - | 케이스 종결 결과 요약. resolutionStatus='resolved'와 함께 기록 |
 | phase | string | - | 작업 단계 변경 (planning, debugging, implementation, verification 등) |
+| mentionTime, eventTime, eventTimeEnd | string | - | 말한 시각과 사건 시각 수정. 준 값만 해석하며 eventTimeEnd는 eventTime과 함께 줄 때만 받는다 |
 | agentId | string | - | 에이전트 ID |
 | dryRun | boolean | - | true 시 실제 변경 없이 패치 적용 후 예상 파편 상태만 반환 |
 
@@ -1016,6 +1028,7 @@ fromId 또는 toId가 타 테넌트 소유 파편인 경우 `"Fragment not found
 | errors_resolved | string[] | - | 해결 에러 ('원인: X -> 해결: Y') |
 | new_procedures | string[] | - | 확립된 절차 |
 | open_questions | string[] | - | 미해결 질문 |
+| lessons | (object\|"NO_ENTRY")[] | - | 옮겨 쓸 교훈. 항목은 `{cue, lesson, evidence, confidence?}`. cue(적용 상황), lesson(할 조작), evidence(근거 관찰) 중 하나라도 비면 저장하지 않는다. confidence는 문자열 `high`, `medium`(기본), `low`이며 숫자를 넣으면 인자 오류다. 근거가 없으면 객체 대신 항목 자체를 문자열 `"NO_ENTRY"`로 넣는다. cue는 상황을 묻는 recall text 질의가 교훈을 찾게 하는 보조 검색어가 된다. 응답 `breakdown.lessons`, `lessons_no_entry`, `lessons_rejected`로 건수를 알린다. 최대 20개 |
 | narrative_summary | string | - | 3~5문장 서사 요약. episode 파편으로 저장되어 세션 연속성에 기여. |
 | task_effectiveness | object | - | {outcome, evaluator, evidence, unmet_requirements[], overall_success, tool_highlights[], tool_pain_points[]} |
 | workspace | string | - | 호출자가 넘긴 항목에 적용할 워크스페이스. 세션 종합 그룹은 원래 workspace를 유지한다. 미지정 시 키의 default_workspace, 그것도 없으면 전역(NULL). |
@@ -1045,10 +1058,13 @@ task_effectiveness 세부 필드:
 | types | string[] | - | 기본: preference, error, procedure, decision |
 | sessionId | string | - | 워킹 메모리 로드용 |
 | structured | boolean | - | 계층 구조 반환. 기본 false. |
+| view | string | - | index는 파편마다 첫 문장 60자 목록으로 주입해 같은 예산에 더 많이 담는다. 본문은 id로 recall해서 연다. 기본 full. |
 | includeKeyName | boolean | X | true 시 fragments 각 항목에 key_id·key_name(액세스 키 라벨) 포함. structured=true 트리 응답에는 적용되지 않음. 기본 false |
 | agentId | string | - | 에이전트 ID |
 | workspace | string | - | 지정 workspace + 전역(NULL). 미지정 시 key default를 적용하고, 둘 다 없으면 전역(NULL)만 포함. |
 | allWorkspaces | boolean | - | master 전용 전체 workspace context 조회. |
+
+응답 `budget.anchor`(`used`, `limit`, `exceeded`, `demote_candidates`)는 주입한 앵커만의 토큰 사용량이다. 앵커는 tokenBudget 절삭을 받지 않고 매번 주입되므로, `exceeded`가 true면 `demote_candidates`의 앵커 지정을 푸는 것을 검토한다.
 
 `MEMENTO_CONTEXT_ANNOTATE=on`(기본)이면 주입 줄 끝에 저장일(UTC)과 assertion 주석 ` (YYYY-MM-DD, assertion)`이 붙는다. `MEMENTO_PROVENANCE=on`(기본)이면 신뢰 등급 1 이하 파편은 ANCHOR와 CORE 주입에서 빠진다. `MEMENTO_ANCHOR_PERMISSION`이 `off`가 아니면 앵커 주입 줄에 비식별 주체 표지(`[k:xxxx]`, master 앵커는 `[master]`)가 붙는다.
 
@@ -1246,10 +1262,11 @@ git 설치본에서 `UPDATE_REQUIRE_SIGNED_TAG=true`(기본 `false`)이면 `inst
 - **제어**: search 의존성이 없으면 비활성 (기본값: 활성)
 
 ### CaseRewardBackprop
-- **트리거**: case_events에 `verification_passed` 또는 `verification_failed` 이벤트가 추가될 때
-- **동작**: 해당 케이스의 증거(fragment_evidence) 파편 importance를 역전파
-  - verification_passed: importance +0.15, quality_verified = true
-  - verification_failed: importance -0.10
+- **트리거**: case_events에 `verification_passed` 또는 `verification_failed` 이벤트가 추가될 때(caseId가 있는 파편을 `amend(assertionStatus="verified"|"rejected")`하면 생긴다)
+- **동작**: 그 검증 이벤트에 연결된 근거 파편만 보상한다. 사례의 다른 근거는 건드리지 않으므로 검증을 거듭해도 누적되지 않는다.
+  - verification_passed: importance +0.15 x 근거 confidence. confidence가 0.5를 넘는 근거만 quality_verified = true
+  - verification_failed: importance -0.10 x 근거 confidence
+  - `contradicts` 근거는 보상하지 않는다
 - **영향**: 검증된 파편의 recall 우선순위가 자동 조정됨
 - **범위**: importance [0.0, 1.0] clamp
 - **제어**: `MEMENTO_CASE_BACKPROP_ENABLED=true`일 때만 동작한다(기본 `false`, 비활성 시 no-op).

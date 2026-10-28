@@ -2,7 +2,7 @@
 
 [LongMemEval-S](https://arxiv.org/abs/2410.10813) 벤치마크 기반. 전체 평가 코드: [longmemeval-memento](https://github.com/JinHo-von-Choi/longmemeval-memento)
 
-일자: 2026-03-29
+일자: 2026-10-10
 평가자: 최진호
 
 ## 구성
@@ -10,85 +10,151 @@
 | 항목 | 값 |
 |------|-----|
 | 데이터셋 | LongMemEval_S (500개 질문, 6개 유형 + abstention) |
-| 수집 방식 | round_direct (턴 쌍 원문 그대로, 300자 절단) |
-| 저장소 | PostgreSQL bulk INSERT, OpenAI text-embedding-3-small을 통한 pgvector 임베딩 |
-| 검색 | memento-mcp recall API (3계층 캐스케이드: L1 Redis, L2 PostgreSQL GIN, L3 pgvector HNSW) |
-| Top-K | 5 |
-| 리더 | Gemini 2.5 Flash (direct 방식, chain-of-thought 미사용) |
-| 평가자 | Gemini 2.5 Flash (LongMemEval 공식 프롬프트 그대로 이식) |
-| 총 파편 수 | 89,006 (전체 임베딩 완료) |
+| 수집 방식 | round_direct (턴 쌍 원문 그대로, 300자 절단). 질문마다 독립 토픽에 약 620개 파편을 넣고 질의 뒤 삭제 |
+| 임베딩 | bge-m3 (CLS 풀링, fp32, 1024차원) |
+| 검색 | memento-mcp recall API (L1 키워드, L2 GIN, L2.5 그래프, L3 시맨틱, 구간 검색, RRF 병합, 어휘 가중) |
+| Top-K | 10, 토큰 예산 20000 |
+| 리더 | deepseek-flash (direct 방식, chain-of-thought 미사용) |
+| 평가자 | gpt-4o-2024-08-06(LongMemEval 공식 평가자 설정: temperature 0, max_tokens 10), MiniMax-M3.1-Flash-Preview, claude-sonnet-5-5. 모두 LongMemEval 공식 프롬프트 그대로 |
+| 구간 검색 | 켬 (`MEMENTO_SEGMENT_EMBEDDING_ENABLED=true`, `MEMENTO_SEGMENT_SEARCH=true`) |
+| 순위 후 예산 선택 | 끔 (검색 순서 절단, 6.5.2까지의 `MEMENTO_RANK_BEFORE_BUDGET=off`) |
+
+질문 직전에 해당 질문 파편의 본문 임베딩과 구간 임베딩이 모두 만들어질 때까지 기다린다. 정확도는 최종 실패 없이 500문항 전체를 분모로 센다(ITT).
 
 ## 검색 성능
 
 | 지표 | 점수 |
 |------|------|
-| recall_any@5 | 0.883 |
-| recall_all@5 | 0.649 |
+| recall_any@5 (세션) | 0.984 |
+| recall_all@5 (세션) | 0.816 |
+| 근거 턴 전체가 top-5에 듦 | 0.878 |
+| 근거 턴 전체가 top-10에 듦 | 0.912 |
+| 근거 턴 전체가 top-20에 듦 | 0.944 |
+| recall 지연 (중앙값 / p95) | 0.5초 / 1.1초 |
 
-### 유형별 검색 성능 (recall_any@5)
+세션 단위 recall은 정답 세션 하나만 맞아도 적중으로 세므로 높게 나온다. 답을 만들 근거 턴이 모두 들어왔는지는 "근거 턴 전체" 지표가 더 정확히 보여 준다.
 
-| 질문 유형 | n | recall_any@5 |
-|-----------|---|-------------|
-| multi-session | 121 | 0.983 |
-| knowledge-update | 72 | 0.972 |
-| single-session-user | 64 | 0.953 |
-| temporal-reasoning | 127 | 0.874 |
-| single-session-preference | 30 | 0.800 |
-| single-session-assistant | 56 | 0.536 |
+### 유형별 검색 성능
 
-### 검색 경로 분포
+| 질문 유형 | n | recall_any@5 | recall_all@5 | 근거 전체 top-10 |
+|-----------|---|-------------|--------------|-----------------|
+| single-session-assistant | 56 | 1.000 | 1.000 | 1.000 |
+| temporal-reasoning | 133 | 0.985 | 0.722 | 0.940 |
+| multi-session | 133 | 1.000 | 0.662 | 0.917 |
+| single-session-user | 70 | 0.986 | 0.986 | 0.886 |
+| knowledge-update | 78 | 0.987 | 0.936 | 0.885 |
+| single-session-preference | 30 | 0.867 | 0.867 | 0.733 |
 
-| 계층 | 적중률 |
-|------|--------|
-| L1 (Redis keyword) | 0.0% |
-| L2 (PostgreSQL GIN) | 0.0% |
-| L3 (pgvector semantic) | 99.0% |
-| RRF fusion | 100.0% |
+### 검색 경로
 
-L1과 L2가 0%인 이유는 round_direct 수집 방식이 세션 ID와 날짜를 키워드로 저장하며 콘텐츠 용어는 저장하지 않기 때문이다. 3계층 캐스케이드는 올바르게 L3 시맨틱 검색으로 폴스루되며, L3가 질의의 99%를 처리한다.
+모든 질문에서 L1, L2, L3, 구간 검색, RRF 병합, 어휘 가중이 실행됐고 L2.5 그래프는 498개 질문에서 실행됐다. 검색 경로 기록의 예: `L1:621 → L2:621 → L2.5Graph:10 → L3:30 → Seg → RRF → Lexical:170`.
 
 ## QA 정확도
 
-| 지표 | 점수 |
-|------|------|
-| 전체 정확도 | 0.404 |
-| 태스크 평균 정확도 | 0.434 |
-| Abstention 정확도 | 0.467 |
+| 지표 | GPT-4o (공식) | MiniMax | Claude |
+|------|---------------|---------|--------|
+| 전체 정확도 (ITT) | 0.840 (420/500, 95% CI 0.805–0.870) | 0.840 (420/500, 95% CI 0.805–0.870) | 0.780 (390/500, 95% CI 0.742–0.814) |
+| 태스크 평균 정확도 | 0.868 | 0.866 | 0.769 |
+| Abstention 정확도 | 0.767 (23/30) | 0.767 (23/30) | 0.667 (20/30) |
+
+공식 평가자(GPT-4o)와 MiniMax는 500문항 중 492문항에서 일치하며 kappa는 0.940이다. 갈린 8건은 양쪽이 4건씩이라 총점이 같다. Claude는 GPT-4o와 468문항에서 일치하고(kappa 0.793) 불일치 32건 중 31건이 GPT-4o만 정답으로 본 경우여서 가장 엄격하다. 특히 single-session-preference에서 차이가 크다.
 
 ### 유형별 QA 정확도
 
-| 질문 유형 | n | 정확도 | 검색 | 갭 |
-|-----------|---|--------|------|-----|
-| single-session-user | 64 | 0.797 | 0.953 | 0.156 |
-| knowledge-update | 72 | 0.583 | 0.972 | 0.389 |
-| single-session-preference | 30 | 0.467 | 0.800 | 0.333 |
-| multi-session | 121 | 0.347 | 0.983 | 0.636 |
-| temporal-reasoning | 127 | 0.252 | 0.874 | 0.622 |
-| single-session-assistant | 56 | 0.161 | 0.536 | 0.375 |
+| 질문 유형 | n | GPT-4o (공식) | MiniMax | Claude | 근거 전체 top-10 | 갭(GPT-4o) |
+|-----------|---|---------------|---------|--------|-----------------|------------|
+| single-session-assistant | 56 | 1.000 | 1.000 | 0.911 | 1.000 | 0.000 |
+| single-session-user | 70 | 0.971 | 0.971 | 0.943 | 0.886 | -0.085 |
+| knowledge-update | 78 | 0.885 | 0.859 | 0.833 | 0.885 | 0.000 |
+| single-session-preference | 30 | 0.833 | 0.833 | 0.467 | 0.733 | -0.100 |
+| temporal-reasoning | 133 | 0.812 | 0.820 | 0.789 | 0.940 | 0.128 |
+| multi-session | 133 | 0.707 | 0.714 | 0.669 | 0.917 | 0.210 |
 
-갭 = 검색 recall - QA 정확도. 갭이 클수록 올바른 세션을 검색했음에도 리더가 답변 추출에 실패한 것을 의미한다.
+갭 = 근거 전체 top-10 비율 - GPT-4o 정확도. 갭이 클수록 근거를 검색했는데도 리더가 답을 만들지 못한 것이다. 음수는 근거를 모두 찾지 못해도 답이 맞은 질문이 있다는 뜻이다.
+
+### 구간 검색 켬/끔 비교
+
+같은 499문항을 짝지어 비교했다.
+
+| 지표 | 구간 검색 끔 | 구간 검색 켬 |
+|------|-------------|-------------|
+| 정확도 (GPT-4o, 공식) | 391/499 (0.784) | 420/499 (0.842) |
+| 정확도 (MiniMax) | 387/499 (0.776) | 420/499 (0.842) |
+| 정확도 (Claude) | 363/499 (0.727) | 390/499 (0.782) |
+| 근거 전체 top-5 | 408/499 | 439/499 |
+| 근거 전체 top-10 | 442/499 | 455/499 |
+| recall 지연 (중앙값 / p95) | 0.63초 / 2.7초 | 0.5초 / 1.1초 |
+
+공식 평가자(GPT-4o) 기준으로 켠 쪽만 정답인 질문이 39개, 끈 쪽만 정답인 질문이 10개다(부호 검정 p = 3.8e-5). MiniMax 기준으로는 켠 쪽만 정답인 질문이 43개, 끈 쪽만 정답인 질문이 10개다(부호 검정 p = 5.6e-6). Claude 기준은 47개 대 20개다(p = 0.0013). 두 설정은 구간 검색만 다르지 않고 임베딩 처리 경로와 구간 임베딩 대기 방식도 다르다. 정답 증가폭이 근거 회수 증가폭보다 커서, 개선의 일부는 top-10 안의 순서 변화나 리더·평가자 편차일 수 있다.
+
+유형별 정답 수는 temporal-reasoning이 94에서 108로, multi-session이 84에서 94로, single-session-preference가 21에서 25로 늘었다(GPT-4o). single-session-assistant는 GPT-4o 기준 56으로 같고 Claude 기준 54에서 51로 줄었다.
 
 ## 분석
 
 ### 검색 강점
 
-AnchorMind의 pgvector 시맨틱 검색은 전체 질문 유형에 걸쳐 88.3%의 recall_any@5를 기록했다. LongMemEval 논문의 검색 표(Table 3)는 질문당 약 500세션인 LongMemEval_M 기준(Stella V5 1.5B 기본 설계 session R@5 0.706, round R@5 0.582)이므로 이 LongMemEval_S 결과와 직접 비교하지 않는다. 검색은 OpenAI 임베딩을 사용한 파편 단위 저장과 pgvector가 맡았다.
-
-multi-session(98.3%)과 knowledge-update(97.2%) 검색은 거의 완벽하며, AnchorMind가 검색 수준에서 세션 간 정보 분산과 시간적 업데이트를 잘 처리함을 보여준다.
+세션 단위 recall_any@5가 0.984이고 근거 턴 전체가 top-10에 든 비율이 0.912다. single-session-assistant는 근거 전체가 항상 top-10에 들고, temporal-reasoning과 multi-session도 0.92~0.94다. 본문이 길어 근거 문장이 묻히는 경우는 구간 검색이 보완한다(아래 켬/끔 비교).
 
 ### 검색 약점
 
-single-session-assistant(53.6%)가 가장 약한 검색 카테고리이다. round_direct 전략은 "User: X / Assistant: Y" 쌍으로 저장하지만, 어시스턴트 발화에 대한 질의는 저장된 형식과 질의 시맨틱이 다르기 때문에 매칭이 잘 되지 않을 수 있다.
+single-session-preference는 근거 전체 top-10 비율이 0.733으로 가장 낮다. multi-session은 recall_all@5가 0.662여서 여러 세션에 흩어진 근거를 상위 5개 안에 모두 모으지 못한다. 근거 턴이 top-10 밖에 있는 질문은 500개 중 44개다.
 
 ### QA 갭 분석
 
-검색 대비 QA 갭이 가장 큰 유형은 multi-session(63.6pp)과 temporal-reasoning(62.2pp)이다. 이 유형들은 다수의 검색된 파편에서 정보를 종합하거나 시간에 대한 추론이 필요하며, 이는 검색 품질이 아닌 리더 LLM의 역량에 의존하는 부분이다.
-
-single-session-user의 갭이 가장 작으며(15.6pp), 단일 검색 파편에 직접적인 사실 답변이 존재할 때 리더가 성공적으로 추출함을 확인해준다.
+갭이 큰 유형은 multi-session(0.210)과 temporal-reasoning(0.128)이다. 근거가 대부분 들어와도 여러 파편의 값을 합산하거나 날짜를 계산하는 단계에서 리더가 주로 틀린다. 검색 개선만으로는 이 구간이 줄지 않는다.
 
 ### Abstention
 
-46.7%의 abstention 정확도는 보통 수준이다. 시스템이 "히스토리에 정보가 없음"과 "정보를 검색하지 못함"을 구분하는 데 어려움을 겪으며, 이는 검색 증강 시스템의 근본적 과제이다.
+Abstention 정확도는 GPT-4o와 MiniMax 0.767(23/30), Claude 0.667(20/30)이다. 표본이 30개라 신뢰구간이 넓다.
+
+## LoCoMo
+
+대화 10개, 질문 1,986개. 대화 한 턴을 파편 하나로 저장하고, 질문마다 가장 비슷한 파편 k개를 꺼내 답하게 했다. 답변 모델은 deepseek-flash다.
+
+| 가져오는 개수 (k) | 10 | 20 | 50 |
+|---|---|---|---|
+| 정답률 (MiniMax 채점) | 0.805 | 0.840 | 0.863 |
+| 정답률 (Claude 채점) | 0.782 | 0.825 | 0.840 |
+| 공식 F1 | 0.605 | 0.630 | 0.633 |
+| 정답 근거가 든 비율 | 0.639 | 0.719 | 0.773 |
+
+정답률은 adversarial을 뺀 1,540문항 기준이다. k=50에서 분류별 정답률(MiniMax)은 single-hop 0.891, temporal 0.882, multi-hop 0.826, open-domain 0.667이다.
+
+- 많이 가져올수록 좋아지지만 k=20 이후 F1은 거의 오르지 않는다.
+- k=50에서도 정답 근거의 23%는 가져오지 못한다.
+- 질문에 답이 없는 adversarial은 k가 커질수록 점수가 내려간다(0.928에서 0.881).
+- 다른 시스템이 발표한 점수와는 답변 모델, 채점 모델, 가져오는 개수가 달라 직접 비교할 수 없다.
+
+## MemBench
+
+기억을 바탕으로 4지선다에 답하는 벤치마크다. 대화·관찰 기록을 한 단계씩 저장하고, 질문마다 파편 10개를 꺼내 답하게 했다. 469문항(답변 모델이 답을 내지 못한 1문항 제외), 답변 모델은 deepseek-flash다.
+
+**정확도 0.859** (95% 구간 0.825–0.888). 찍기 기준은 0.25다.
+
+| 질문 종류 | 정확도 |
+|---|---|
+| 단일 세션 보조 (30문항) | 1.00 |
+| 단일 홉 (70) | 0.99 |
+| 비교 (50) | 0.94 |
+| 다중 홉 (69) | 0.87 |
+| 집계 (50) | 0.60 |
+
+- 한두 개 기록만 찾으면 되는 질문은 거의 다 맞힌다.
+- 흩어진 기록을 모아야 하는 집계와 다중 홉이 약하다. 필요한 기록이 상위 10개에 다 들어오지 못해서다.
+
+## BEAM
+
+긴 대화(100K 토큰) 20개, 질문 400개. 대화를 쌍 단위로 저장하고 질문마다 파편 24개를 꺼내 답하게 했다. 답변 모델은 deepseek-flash다. 공식 채점 모델을 쓸 수 없어 MiniMax와 Claude가 각각 채점했다.
+
+| 채점 모델 | 전체 점수 |
+|---|---|
+| MiniMax | 0.50 |
+| Claude | 0.44 |
+
+- 잘하는 능력: 선호 따르기(0.71–0.80), 정보 추출(0.71–0.74).
+- 못하는 능력: 모순 해결(0.16–0.23), 사건 순서(0.18–0.25), 요약(0.30–0.40).
+- 파편을 24개에서 50개로 늘려도 점수는 오르지 않는다.
+- 공식 채점 모델이 아니라서 논문 점수와 직접 비교할 수 없다.
 
 ## 오프라인 골드셋 계측 (2026-08-28)
 
@@ -272,28 +338,6 @@ node scripts/measure/recall-metrics.mjs --target localhost:35433/<복구본_DB> 
 ```bash
 node scripts/measure/recall-metrics.mjs --compare run-a.json run-b.json --out compare.json
 ```
-
-### 순위 후 예산 선택 비교 (`MEMENTO_RANK_BEFORE_BUDGET`)
-
-recall 예산 선택(`MEMENTO_RANK_BEFORE_BUDGET=on`)과 검색 순서 절단(`off`)을 같은 세트, 같은 조건에서 비교한다. 스위치는 호출 시점에 읽으므로 실행할 때의 환경 변수로 정하고, 지표 JSON의 `params.rank_before_budget`에 실제 적용 값이 남는다. 예산이 묶이지 않으면 두 경로의 결과가 같으므로 `--token-budget`은 recall 기본값 1000 이하로 두고 두 실행에 같은 값을 쓴다. 연결 파편도 예산 안에서 고르는 효과까지 보려면 두 실행 모두 `--include-links on`을 준다. 실제 실행은 복구본 DB와 임베딩(`--embeddings on`)이 필요한 소유자 단계이며, 아래 절차의 결과는 아직 측정하지 않았다.
-
-```bash
-# 1. 새 복구본 A에서 기준 실행(검색 순서 절단)
-MEMENTO_RANK_BEFORE_BUDGET=off node scripts/measure/recall-metrics.mjs \
-  --target localhost:35433/<복구본_A> --embeddings on --token-budget 1000 --include-links on --out budget-off.json
-
-# 2. 새 복구본 B에서 후보 실행(순위 후 예산 선택)
-MEMENTO_RANK_BEFORE_BUDGET=on node scripts/measure/recall-metrics.mjs \
-  --target localhost:35433/<복구본_B> --embeddings on --token-budget 1000 --include-links on --out budget-on.json
-
-# 3. 예산 내 nDCG만 짝지은 부트스트랩으로 비교
-node scripts/measure/recall-metrics.mjs --compare budget-off.json budget-on.json --metric ndcg_at_budget --out budget-compare.json
-```
-
-- `--metric ndcg_at_budget`은 비교 결과에서 그 지표만 남긴다. 구간 값은 모든 지표를 비교할 때와 같다.
-- 판단: `comparisons`에서 `group`이 `overall`인 항목의 `ci_low`가 0보다 크고 `insufficient_n`이 false이면 예산 내 nDCG가 개선된 것이다. 부분집합, 태그, 영역 묶음은 같은 규칙으로 읽는다.
-- `warnings`에 `token_budget`, `query_keywords`, `include_links` 차이가 있으면 조건이 다른 실행이므로 비교하지 않는다.
-- 복구본에 마이그레이션 051을 적용하면(`DATABASE_URL=postgresql://<사용자>:<비밀번호>@localhost:35433/<복구본_B> npm run migrate`, `DATABASE_URL`을 명시해 다른 설정 파일의 접속 값을 쓰지 않게 한다) 후보 실행의 `search_events.candidate_count`, `budget_kept`로 예산이 묶인 recall의 비율을 볼 수 있다(`SELECT count(*) FILTER (WHERE budget_kept < candidate_count), count(*) FROM agent_memory.search_events WHERE candidate_count IS NOT NULL`). 적용하지 않아도 recall과 지표는 같고 검색 이벤트는 두 열 없이 기록된다.
 
 ### context 주입 줄 주석 토큰 측정 (`MEMENTO_CONTEXT_ANNOTATE`)
 

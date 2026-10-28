@@ -45,6 +45,9 @@ server.js  (HTTP 서버)
             │   ├── FragmentSearch.js     3계층 검색 조율 (구조적: L1→L2, 시맨틱: L1→L2‖L3 RRF 병합). `_executeSearch`는 `_buildTextRRF` (text 파라미터 있을 때 L2+L3 병렬 RRF) / `_buildFallbackCombined` (text 없을 때 L1+L2, keywords 존재 시 합성 텍스트 L3 시맨틱 보조를 병렬 결합해 `L3kw:N` 세그먼트로 병합) 두 내부 메서드로 분해
             │   ├── FragmentReader.js     파편 읽기. `getById(id, agentId, keyId, groupKeyIds)` — groupKeyIds 파라미터로 그룹 소속 키의 파편도 단일 호출로 조회. `getByIds`, `getHistory`, `searchByKeywords`, `searchBySemantic`, `findCaseIdBySessionTopic`, `findErrorFragmentsBySessionTopic`
             │   ├── ContextBuilder.js     context() 로직 전담. effective workspace의 Anchor 예약분을 우선 선택한 뒤 후보를 anchor > core > learning > working 순으로 ID 중복 제거하고, 앵커와 비앵커 최소 슬롯을 보장한 공통 토큰 선택 결과로 flat/structured/injectionText를 조립
+            │   ├── ContextIndexView.js   context `view: "index"`의 목록 줄(첫 문장 60자)과 그 토큰 수
+            │   ├── AnchorBudgetLoader.js 새 앵커 지정의 예산 판정에 쓸 현재 주입 앵커(같은 키, 같은 workspace 상위 앵커)를 읽는다
+            │   ├── WorkspaceBoundary.js  allWorkspaces 조회에서 다른 workspace fact에 workspace_warning을 다는 순수 함수
             │   ├── ContextLines.js       context 주입 줄 렌더러(순수 함수). 헤더와 줄 머리 `- `는 고정이고 `MEMENTO_CONTEXT_ANNOTATE=on`이면 기억 줄 끝에 ` (YYYY-MM-DD, assertion)`을 붙인다
             │   ├── AnswerPack.js         recall `format:"pack"` 답 꾸러미 v0 렌더러(순수 함수). 고정 정책 문단, `<<<MEMORY ...>>>` 구분자 블록, 본문 이스케이프와 1000자 상한, UTC 날짜, caseId/topic 묶음
             │   ├── AnswerPackLoader.js   답 꾸러미 출처(source)와 대체 체인(superseded_by 링크) 조회. recall과 같은 agent, 키, workspace 술어. 기본 형식 recall 응답에 `origin`, `trust_tier`를 싣는다(`MEMENTO_PROVENANCE`)
@@ -55,7 +58,7 @@ server.js  (HTTP 서버)
             │   ├── provenance-metrics.js core 신뢰 등급 제외 지표 `memento_context_core_trust_excluded_total{reason}`
             │   ├── GraphNeighborSearch.js L2.5 그래프 이웃 검색 (fragment_links 1-hop 양방향 UNION, tanh 포화 스코어링 + 관계 유형별 부스트)
             │   ├── HistoryReconstructor.js case_id/entity 기반 서사 재구성 (ordered_timeline, causal_chains, unresolved_branches)
-            │   ├── BudgetSelector.js     recall 토큰 예산 선택(`MEMENTO_RANK_BEFORE_BUDGET`). 검색 순서 절단(`trimInSearchOrder`)과 최종 점수 기반 선택(`selectWithinBudget`)을 순수 함수로 둔다
+            │   ├── BudgetSelector.js     recall 토큰 예산 선택. 검색 순서 절단(`trimInSearchOrder`)과 최종 점수 기반 선택(`selectWithinBudget`)을 순수 함수로 둔다
             │   ├── LexicalSearch.js      본문 어휘 채널(L2b, `MEMENTO_LEXICAL_CHANNEL`). recall이 연 검색에서만 질의를 저장 경로와 같은 토큰화의 OR tsquery로 바꿔 키, workspace, agent 범위 일치 행 400건 안에서 `ts_rank_cd` 상위 200건을 돌려준다(질의 시간 상한 `MEMENTO_LEXICAL_TIMEOUT_MS`)
             │   ├── RankFusion.js         계층 결과의 RRF 병합(`mergeRRF`)과 캐시 수화 후보 정렬(`mergeHydratedCandidates`)
             │   ├── Reranker.js           Cross-Encoder 재정렬 (기본 비활성; MEMENTO_RERANKER_ENABLED 또는 RERANKER_URL로 활성)
@@ -70,6 +73,7 @@ server.js  (HTTP 서버)
             │   └── SearchSideEffects.js  검색 부작용 격리 모듈. commitSearchSideEffects()가 searchEventId를 동기 반환하고 SearchParamAdaptor.recordOutcome()을 fire-and-forget으로 호출. FragmentSearch는 검색 파이프라인에만 집중
             ├── write/                    쓰기 레이어 모듈
             │   ├── WriteGate.js          의미 쓰기 단일 관문. normalize, sensitive, length, policy, workspace, anchor 단계를 순서대로 적용하고 위반을 경고로 남기거나 hard gate 키에서 거부한다. anchor 단계는 remember와 amend의 앵커 지정을 키의 anchor 권한과 앵커 상한으로 판정한다. `MEMENTO_WRITE_GATE`, `MEMENTO_ANCHOR_PERMISSION`
+            │   ├── LessonCue.js          reflect lessons 정규화와 cue 행(`fragment_synthetic_query`, origin='cue') 등록
             │   ├── ReviewQueue.js        검토 대기열 동기 판정(순수 함수). 지시 덮어쓰기 문구, 신뢰 등급 1 이하의 앵커와 preference와 procedure, 무권한 앵커 경고를 사유로 모으고 키의 검토 방식(off, flagged, all)으로 review_state='pending'을 싣는다. 앵커 요청은 승인까지 보류한다. INSERT 열 조각과 갱신 SET 조각. `MEMENTO_REVIEW_QUEUE`
             │   ├── reviewRules.js        지시 덮어쓰기 문구 규칙 표(한국어, 영어). 걸리지 않아야 하는 일반 절차문 표는 시험에 있다
             │   ├── write-gate-metrics.js 관문 판정 지표 `memento_write_gate_total{entry,outcome}`, 앵커 판정 지표 `memento_anchor_decision_total{outcome,reason}`
@@ -111,6 +115,7 @@ server.js  (HTTP 서버)
             │   └── contradictionAudit.js 모순 해소 기록의 본문(`MEMENTO_FORGET_CASCADE=on`이면 파편 id만)과 topic
             ├── consolidate/              통합/GC 레이어 모듈
             │   ├── MemoryConsolidator.js 22단계 선언형 유지보수 파이프라인 (stageDefs 배열, TOTAL_STAGES = stageDefs.length). NLI + Gemini 하이브리드
+            │   ├── statsSummaries.js     memory_stats의 workspace 분포(앵커 수, 앵커 토큰 포함), 키별 기입률, 세션당 파편 분포 요약
             │   ├── ConsolidatorGC.js     피드백 리포트, stale 파편 수집/정리, 긴 파편 분할, 피드백 기반 보정
             │   ├── FragmentGC.js         파편 만료 삭제, 지수 감쇠, TTL 계층 전환 (permanent parole + EMA 배치 감쇠 포함)
             │   ├── idOrderedUpdate.js    감쇠와 utility 점수 갱신을 id 오름차순 묶음(`MEMENTO_SCORE_UPDATE_BATCH`)으로 잠그고 갱신. 최소 변화량(`MEMENTO_DECAY_MIN_DELTA`, `MEMENTO_UTILITY_MIN_DELTA`) 미만 행은 다시 쓰지 않음
@@ -153,6 +158,7 @@ server.js  (HTTP 서버)
             ├── LexicalCoverage.js        content_tokens 채움 지표 `memento_lexical_tokens_coverage_ratio`, `memento_lexical_tokens_missing`(라벨 없음)
             ├── keyScope.js               `keyScopeClause(params, column, { keyId, groupKeyIds })` 공유 헬퍼. key_id 범위 WHERE 절 생성. FragmentReader.getById / findCaseIdBySessionTopic / findErrorFragmentsBySessionTopic / GraphLinker / LinkStore / HistoryReconstructor / reconstruct.js에서 공유 사용
             ├── anchorPolicy.js           앵커 판정 순수 함수. 앵커 변경 종류(set, clear), 권한과 키별 상한 판정, context 주입 줄의 비식별 주체 표지(`k:` + 키 id sha256 앞 4자)
+            ├── anchorBudget.js           context 앵커 토큰 예산 판정 순수 함수(budget.anchor 보고, 새 앵커 지정의 초과 판정과 내릴 후보)
             ├── CaseEventStore.js         semantic milestone 로그 (case_events CRUD, DAG 엣지, 증거 조인)
             ├── memory-schema.sql         PostgreSQL 스키마 정의
             └── migrations/               DB 마이그레이션 SQL 59개 (migration-001 ~ migration-060, 046 결번, schema_migrations 테이블 기준 순차 적용). `scripts/migrate.js`·`scripts/lint-migrations.js`가 이 경로를 사용
@@ -307,6 +313,7 @@ lib/tools/
 ├── memory-audit.js 기억 도구의 파일 감사 기록과 감사 이벤트 값(remember, amend, forget, link, 앵커)
 ├── reconstruct.js  reconstruct_history, search_traces 도구 핸들러 (Narrative Reconstruction)
 ├── memory-schemas.js  도구 스키마 정의 (inputSchema)
+├── reflect-params.js  reflect `lessons`와 context `view` 인자 스키마
 ├── tool-head.js  모든 도구의 name, title, MCP 힌트(`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`)
 ├── recall-response-params.js recall 응답 형태 파라미터(`fields`, `format`) 스키마 조각
 ├── origin-param.js remember와 batch_remember 항목의 `origin` 파라미터 스키마 조각
@@ -812,7 +819,7 @@ fragment_links의 weight/confidence 변경 이력을 기록하는 감사 테이�
 
 ### fragment_synthetic_query
 
-파편 저장 시 생성한 합성 역질의와 그 임베딩을 담는 보조 벡터 표(migration-043). `fragments`와 분리해 두어 `QuotaChecker`의 `fragment_limit` 판정에 포함되지 않으며, 파생 자료이므로 유실 시 백필로 재생성한다. 임베딩 차원은 `fragments.embedding`을 따른다(migration-049와 `npm run migrate`의 정합화 단계).
+파편으로 되돌아가는 보조 검색어와 그 임베딩을 담는 보조 벡터 표(migration-043). 행은 두 종류다: LLM이 본문에서 만든 역질의(`origin='generated'`)와 reflect 교훈의 상황 단서(`origin='cue'`). `fragments`와 분리해 두어 `QuotaChecker`의 `fragment_limit` 판정에 포함되지 않으며, 파생 자료이므로 유실 시 백필로 재생성한다. 임베딩 차원은 `fragments.embedding`을 따른다(migration-049와 `npm run migrate`의 정합화 단계).
 
 | 컬럼 | 타입 | 설명 |
 |-|-|-|
@@ -824,8 +831,22 @@ fragment_links의 weight/confidence 변경 이력을 기록하는 감사 테이�
 | agent_id | TEXT | 에이전트 구분 (기본 `default`) |
 | workspace | TEXT | 워크스페이스 격리 |
 | created_at | TIMESTAMPTZ | 생성 시각 |
+| source_content_hash | TEXT | 행을 만들 때의 원본 `content_hash`. 현재 본문과 같은 행만 검색한다(migration-061) |
+| origin | TEXT | `generated`(본문이 바뀌면 다시 만든다) 또는 `cue`(본문이 바뀌어도 남는다). 기본 `generated`(migration-068) |
 
 `(fragment_id, md5(query_text))`에 UNIQUE 인덱스가 있어 같은 질의는 중복 적재되지 않는다.
+
+### embedding_profile
+
+저장된 임베딩을 만든 설정을 한 행으로 남기는 표(migration-069). 기동 검사가 현재 설정과 비교해, 차원은 같은데 제공자나 모델이 다르면 재임베딩이 필요하다고 경고한다. 비어 있으면 첫 기동이 채우고, 재임베딩 뒤에는 `node scripts/check-embedding-consistency.js --record`로 갱신한다.
+
+| 컬럼 | 타입 | 설명 |
+|-|-|-|
+| id | SMALLINT PK | 항상 1 |
+| provider | TEXT | 임베딩 제공자 |
+| model | TEXT | 임베딩 모델 |
+| dimensions | INTEGER | 벡터 차원 |
+| recorded_at | TIMESTAMPTZ | 기록 시각 |
 
 ### idempotency_records
 
@@ -1049,7 +1070,7 @@ recall 도구는 비용이 낮은 계층부터 순서대로 검색한다. 앞 �
 
 **L2: PostgreSQL GIN 인덱스.** L1 실행 후 항상 실행된다. keywords TEXT[] 컬럼에 GIN(Generalized Inverted Index) 인덱스가 걸려 있다. 검색은 `keywords && ARRAY[...]` 연산자로 수행한다 — 배열 간 교집합 존재 여부를 묻는 연산자다. GIN 인덱스는 배열의 각 원소를 개별적으로 인덱싱하므로 이 연산이 인덱스 스캔으로 처리된다. 순차 스캔이 아니다.
 
-**L2.5: Graph 이웃 확장.** L2 상위 5개 파편의 1-hop 이웃을 fragment_links에서 수집한다. GraphNeighborSearch가 담당하며 RRF 병합 시 가중치 1.5x가 적용된다. 그래프 이웃은 L2 결과가 존재할 때만 실행되므로 추가 비용은 단일 SQL 조회 1회다.
+**L2.5: Graph 이웃 확장.** text 검색에서는 L2와 L3 상위 파편을 번갈아 고른 `graph.seedCount`개(기본 10)의 1-hop 이웃을 fragment_links에서 수집한다. 의미 검색으로만 찾은 파편의 연결 근거도 후보가 된다. GraphNeighborSearch가 담당하며 RRF 병합 시 가중치 1.5x가 적용된다. 시드가 없으면 실행하지 않으며 추가 비용은 단일 SQL 조회 1회다.
 
 **L3: pgvector HNSW 코사인 유사도.** recall 파라미터에 `text` 필드가 있을 때만 발동한다. 결과 수 부족만으로는 L3가 활성화되지 않는다. 쿼리 텍스트를 임베딩 벡터로 변환하여 `embedding <=> $1` 연산자로 코사인 거리를 계산한다. EmbeddingCache가 Redis에 쿼리 임베딩을 캐싱(키: `emb:q:{sha256 앞 16자}`, TTL 1시간)하므로 동일 쿼리 반복 시 임베딩 API 호출을 건너뛴다. 캐시 장애 시 원본 API로 폴백한다. 모든 임베딩은 L2 정규화된 단위 벡터이므로 코사인 유사도와 내적이 동치다. HNSW 인덱스가 근사 최근접 이웃을 빠르게 찾는다. `threshold` 파라미터로 유사도 하한을 지정할 수 있다 — 이 값 미만의 L3 결과는 결과에서 제외된다. L1/L2 경유 결과는 similarity 값이 없으므로 threshold 필터링에서 제외된다.
 
@@ -1065,7 +1086,7 @@ recall에 `includeLinks: true`(기본값)가 설정되어 있으면 결과 파�
 
 **MemoryRecaller 최종 정렬 (`computeRecallScore`).** FragmentSearch가 반환한 결과에 includeLinks 파편이 합류한 직후, `MemoryRecaller.recall`이 통합 정렬을 한 번 더 수행한다. 단순 복합 점수 재정렬은 cross-encoder reranker 결과를 폐기하므로 다음 4원칙을 따른다. (1) `rerankerScore`가 있으면 그것을 base로 보존한다. (2) 없으면 `effectiveImportance × 0.4 + temporalProximity × 0.3 + similarity × 0.3`에 `unrerankedBaseDiscount`(0.85)를 곱해 reranking 미검증 페널티를 부여한다. (3) `lexicalMatchScore`(topic exact +4, kw in topic +2, kw in keywords +1.5, kw in content +1, 다중 결합 +2)를 log 스케일로 정규화한 뒤 제한 가중치(`lexicalWeightReranked` 0.12 / `lexicalWeightFallback` 0.18)로 가산한다. `lexWeight`는 집합 단위가 아닌 파편별 `rerankerScore` 유무로 분기한다. (4) includeLinks로 추가된 파편은 정렬 직전에 `_source="linked"`로 태깅되어 `lexicalLinkedMultiplier`(0.5)로 lexical 가중치가 절반으로 감쇠된 뒤, 정렬 직후 응답에서 제거된다. 이 설계는 `if (lexical > 0) return 1000 + lexical` 같은 hard override를 의도적으로 피해 cross-encoder 결과 폐기·이중 계산·페이지네이션 불안정을 막는다.
 
-**예산 선택 (`BudgetSelector`).** `MEMENTO_RANK_BEFORE_BUDGET=on`(기본)이면 FragmentSearch는 토큰 예산으로 자르지 않은 후보를 돌려주고, `MemoryRecaller`가 연결 파편을 합쳐 `computeRecallScore`로 점수를 매긴 뒤 `selectWithinBudget`이 `tokenBudget` 안에서 고른다. 후보 전체가 예산 안이면 전부 고르고, 연결 파편도 같은 예산을 쓴다. `off`이면 검색 계층이 검색 순서대로 예산을 자른 뒤(`trimInSearchOrder`) 연결 파편을 예산 밖에서 더한다. 선택 규칙과 상한은 [Configuration](configuration.md)의 `MEMENTO_RANK_BEFORE_BUDGET` 행에 있다.
+**예산 선택 (`BudgetSelector`).** FragmentSearch가 예산으로 자르지 않은 후보를 주면, `MemoryRecaller`가 연결 파편을 합쳐 최종 점수(`computeRecallScore`)를 매기고 `selectWithinBudget`이 `tokenBudget` 안에서 점수가 높은 파편을 고른다. 연결 파편도 같은 예산을 쓴다.
 
 **본문 어휘 채널 (`LexicalSearch`, L2b).** recall이 연 text 검색은 L2, L3와 함께 어휘 채널을 병렬로 부른다(검색 질의의 `lexicalChannel: true`는 recall 진입점만 켠다. 충돌 탐지, 자동 링크 같은 저장 경로의 내부 검색은 채널을 부르지 않는다). 저장 경로(remember, batch_remember, 본문을 바꾸는 amend, reflect, 가져오기, 분할)는 본문의 형태소 토큰과 3자리 이상 숫자(`LexicalTokens`, 앞 2000자, 공백 없는 긴 연속은 토큰화하지 않음)를 공백으로 이어 `fragments.content_tokens`(`to_tsvector('simple', ...)`, 마이그레이션 053)에 같은 문장으로 기록한다. 검색은 질의를 같은 방법으로 토큰화한 OR tsquery로 키, workspace, agent 범위와 검색 필터를 통과한 일치 행을 400건까지 읽고 그 안에서 `ts_rank_cd` 순 상위 200건을 돌려준다. 질의 하나는 `MEMENTO_LEXICAL_TIMEOUT_MS`(기본 120ms)를 넘으면 취소되고 그 요청에서만 채널이 빠진다. `ts_rank_cd`는 문서 하나와 질의만 보므로 다른 키의 자료가 순위에 영향을 주지 않는다. 임베딩이 켜져 있으면 후보는 RRF의 `lexical` 계층(가중 `lexicalWeightFactor`)으로 합류하고, 꺼져 있으면 다른 계층에 없는 후보만 대체 경로의 결과 뒤에 붙는다. 채널은 RRF 입력으로만 순위에 기여하고 recall 최종 점수(`computeRecallScore`)는 바꾸지 않는다. 그 검색의 최고 `ts_rank_cd` 대비 점수(`_lexicalScore`)는 다른 점수가 없는 어휘 전용 후보의 검색 계층 순서에만 쓰고 응답에서 지운다. `content_tokens`가 NULL인 행은 채널에서 빠지며 `scripts/backfill-content-tokens.mjs`가 채운다. 참여 여부는 `LexicalSchema`가 정한다: 유효한 GIN 색인이 있을 때만 참여하고, 열이 없거나 색인이 없거나 무효이면 참여하지 않는다(각 경고 한 번).
 
@@ -1116,7 +1137,7 @@ case_id로 파편을 묶어 과거 유사 사례를 구조화 검색하고 인�
 | `decision_committed` | 아키텍처/기술 결정 확정 |
 | `error_observed` | 에러 관측 기록 |
 | `fix_attempted` | 수정 시도 |
-| `verification_passed` | 검증 통과 (→ CaseRewardBackprop 역전파 +0.15) |
+| `verification_passed` | 검증 통과 (→ CaseRewardBackprop가 이 이벤트의 근거에 +0.15 x confidence) |
 | `verification_failed` | 검증 실패 (→ CaseRewardBackprop 역전파 -0.10) |
 | `case_closed` | `amend`가 case_id가 있는 파편의 `resolutionStatus`를 resolved로 바꿀 때(이전 상태가 resolved가 아닐 때) 기록하는 종결 이벤트 |
 
@@ -1153,8 +1174,9 @@ recall 도구에 `caseMode: true`를 전달하면 CaseRecall 경로가 활성화
 
 `lib/memory/signals/CaseRewardBackprop.js`. case_events에 `verification_passed` 또는 `verification_failed` 이벤트가 삽입될 때 fragment_evidence를 통해 증거 파편의 importance를 원자적으로 역전파한다. `MEMENTO_CASE_BACKPROP_ENABLED` 환경변수가 `"true"`가 아니면 호출 즉시 반환된다.
 
-- `verification_passed` → 증거 파편 `importance += 0.15` (상한 1.0 클램프)
-- `verification_failed` → 증거 파편 `importance -= 0.10` (하한 0.0 클램프)
+- 대상은 그 검증 이벤트에 연결된 `supports`, `produced_by` 근거뿐이다. 같은 사례의 다른 이벤트 근거와 `contradicts` 근거는 바꾸지 않는다. 근거는 `CaseEventStore.append`의 `evidence`로 이벤트와 같은 트랜잭션에 기록되고, 보상은 커밋 뒤에 돈다
+- `verification_passed` → 근거 파편 `importance += 0.15 x confidence` (상한 1.0 클램프). confidence가 0.5를 넘는 근거만 `quality_verified=TRUE`
+- `verification_failed` → 근거 파편 `importance -= 0.10 x confidence` (하한 0.0 클램프)
 - PostgreSQL UPDATE … RETURNING으로 단일 쿼리 원자 갱신
 
 ---
@@ -1484,7 +1506,7 @@ MemoryConsolidator의 LLM 재작성 stage 3종(`split_long_fragments`, `detect_c
 
 ProactiveRecall의 caseIdPolicy는 `"strict-or-adjacent"`(기본)로 동작한다. 동일 case_id이거나 24h 이내 인접 케이스인 파편 쌍만 자동 링크 대상이 된다.
 
-autoLinkSessionFragments는 errors×decisions 곱집합 방식이 아닌 1:1 schema-fit 매칭을 사용한다. `linkSuggestions[]` 배열을 반환하며 ReflectProcessor가 `_meta.link_suggestions` 경로로 전파한다.
+autoLinkSessionFragments는 errors×decisions 곱집합 방식이 아닌 1:1 schema-fit 매칭을 사용한다. `linkSuggestions[]` 배열을 반환하며 ReflectProcessor가 `_meta.link_suggestions` 경로로 전파한다. 후보는 같은 그룹 안에서 키워드 겹침이 높은 순서(동점은 id 순)로 고르고, 겹침이 `MEMENTO_LINK_SUGGEST_MIN_OVERLAP` 미만이면 제안하지 않으며, 그룹당 `MEMENTO_LINK_SUGGEST_MAX`개로 자른다. `resolved_by`의 방향은 "에러(fromId) → 해결책(toId)"로 통일돼 있다. `link` 도구, 연결 제안과 자동 연결(절차–오류 쌍), 케이스 이벤트 간선, `MemoryLinker`의 해결된 에러 강등(시작점이 error이면 시작점을 내림), `getRCAChain`이 모두 이 방향을 쓴다. 해결책 → 에러 방향으로 저장된 이전 `resolved_by`는 `getRCAChain`(절차만)과 미해결 판정에서 계속 읽는다. 오류–결정 후보(`caused_by`)의 `meta.relationHint`는 오류에서 결정으로 가는 `resolved_by`를 가리킨다. ReflectProcessor가 넘기는 파편 객체에는 caseId와 sessionId가 없어 자동 연결 관문 (a)는 reflect 경로에서 통과하지 않는다.
 
 ---
 
@@ -1536,9 +1558,9 @@ migration-035(`lib/memory/migrations/migration-035-morpheme-indexed.sql`): `frag
 
 ```
 lib/memory/
-├── read/          FragmentSearch, FragmentReader, ContextBuilder, GraphNeighborSearch, HistoryReconstructor, Reranker, CaseRecall, LinkedFragmentLoader, RecallSuggestionEngine, SearchScope, SearchSideEffects
+├── read/          FragmentSearch, FragmentReader, ContextBuilder, GraphNeighborSearch, HistoryReconstructor, Reranker, CaseRecall, LinkedFragmentLoader, RecallSuggestionEngine, SearchScope, SearchSideEffects, ContextIndexView, AnchorBudgetLoader, WorkspaceBoundary
 ├── transfer/      exportFormat, FragmentExporter, ImportRunner, ImportReport, importRecords, importErrors, importRuntime
-├── write/         WriteGate, DedupScope, FragmentImporter, FragmentWriter, FragmentFactory, FragmentStore, RememberPostProcessor, ConflictResolver, BatchRememberProcessor, BatchRememberWorker
+├── write/         WriteGate, DedupScope, FragmentImporter, FragmentWriter, FragmentFactory, FragmentStore, RememberPostProcessor, ConflictResolver, BatchRememberProcessor, BatchRememberWorker, LessonCue
 ├── link/          ReconsolidationEngine, GraphLinker, LinkStore, SessionLinker, TemporalLinker, ContradictionDetector
 ├── consolidate/   MemoryConsolidator, ConsolidatorGC, FragmentGC, decay, UtilityBaseline
 ├── embedding/     EmbeddingWorker, EmbeddingCache, MorphemeIndex, MorphemeTokenizer, LexicalTokens
@@ -1579,7 +1601,7 @@ FragmentSearch는 검색 파이프라인 결과 생성에만 집중하고, 부�
 
 `lib/memory/consolidate/MemoryConsolidator.js`. stage 목록을 `stageDefs[]` 배열로 선언하며 `TOTAL_STAGES = stageDefs.length`로 자동 집계한다. 새 stage 추가 시 배열에 항목 1개만 push하면 progress 계산과 emit이 자동 반영된다.
 
-현재 22개 stage (순서):
+현재 23개 stage (순서):
 
 | 번호 | name | 설명 |
 |---|---|---|
@@ -1598,13 +1620,14 @@ FragmentSearch는 검색 파이프라인 결과 생성에만 집중하고, 부�
 | 13 | promote_anchors | anchor 승격 |
 | 14 | detect_contradictions | 모순 감지 |
 | 15 | detect_supersessions | supersede 관계 감지 |
-| 16 | process_pending_contradictions | 보류 모순 처리 |
-| 17 | feedback_report | 피드백 리포트 생성 |
-| 18 | feedback_calibration | 피드백 기반 보정 |
-| 19 | prune_keyword_indexes | 키워드 인덱스 정리 |
-| 20 | collect_stale_fragments | stale 파편 수집 |
-| 21 | purge_stale_reflections | 오래된 reflect 정리 |
-| 22 | gc_search_events | 검색 이벤트 GC |
+| 16 | build_digests | topic 시간선과 선호 목록 요약 생성(`MEMENTO_DIGEST`) |
+| 17 | process_pending_contradictions | 보류 모순 처리 |
+| 18 | feedback_report | 피드백 리포트 생성 |
+| 19 | feedback_calibration | 피드백 기반 보정 |
+| 20 | prune_keyword_indexes | 키워드 인덱스 정리 |
+| 21 | collect_stale_fragments | stale 파편 수집 |
+| 22 | purge_stale_reflections | 오래된 reflect 정리 |
+| 23 | gc_search_events | 검색 이벤트 GC |
 
 ### batchPool / Primary pool 분리
 

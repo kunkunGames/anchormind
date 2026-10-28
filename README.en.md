@@ -246,6 +246,10 @@ Two options. You can use both.
 
 Injected memories sit below the system prompt and instruction files. Facts work well, such as "we use PostgreSQL 15"; behavior rules, such as "write tests in Given-When-Then," may be ignored if they conflict. Put behavior rules in `CLAUDE.md`, `AGENTS.md`, hooks, or skills.
 
+#### Can the agent tell when memory has no answer?
+
+Check `_meta.evidence.status` in the `recall` response. `no_evidence` means nothing was found; `partial` means some key words of the question are missing from the results (listed in `uncovered_terms`). The agent can search again with those words or answer that it does not remember. Questions such as "how many" or "when" also get the evidence in time order and a per-topic timeline digest.
+
 ### Data and security
 
 #### Where is my memory stored?
@@ -276,7 +280,13 @@ Memory is stored per fragment, so you fix only the wrong fragment with `amend` o
 
 #### What happens when new content contradicts existing content?
 
-The server detects the contradiction and expires the old fragment (anchors are exempt). Nothing is deleted; history stays through `valid_to` and `superseded_by`. The steps are in [Internals](docs/internals.en.md#contradiction-detection-pipeline).
+The server detects the contradiction and expires the old fragment (anchors are exempt). Nothing is deleted; history stays through `valid_to` and `superseded_by`. The steps are in [Internals](docs/internals.en.md#contradiction-detection-pipeline). Which side is newer is decided by when it was said (`mentionTime`, else the storage time).
+
+To see the earlier value, pass `includeHistory: true` to `recall`; the previous value follows the current one. Contradictions that are not settled yet are marked with `conflicts_with`.
+
+#### Does it remember when things happened?
+
+It keeps when something was said and when it happened separately. `remember` accepts `mentionTime` and `eventTime`; without `eventTime` it reads expressions such as "yesterday", "2026-03-14" or "last week" from the content. Use `order: "chronological"` in `recall` for the order of events, and `timeRange: { from, to, basis: "event" }` to filter by when things happened.
 
 #### How do I mark content I am not sure about?
 
@@ -317,18 +327,21 @@ Memory is stored in short fragments, usually one or two sentences. Each one has 
 | `relation` | Relations and dependencies between entities |
 | `episode` | Narrative with before and after (1000 chars; the rest 300) |
 
-The main tools are `context` for restoring core memory at session start, `recall` for search, `remember` for saving fragments, and `reflect` for saving a session-end summary. Short version: these four cover the normal flow. All tools and usage rules: [SKILL.md](SKILL.md). Full feature list: [Capabilities](docs/capabilities.en.md).
+The main tools are `context` for restoring core memory at session start, `recall` for search, `remember` for saving fragments, and `reflect` for saving a session-end summary and lessons that carry over to other work. Short version: these four cover the normal flow. All tools and usage rules: [SKILL.md](SKILL.md). Full feature list: [Capabilities](docs/capabilities.en.md).
 
 ## Benchmark
 
-[LongMemEval-S](https://arxiv.org/abs/2410.10813), 500 questions (measured 2026-03-29, reader and judge Gemini 2.5 Flash):
+[LongMemEval-S](https://arxiv.org/abs/2410.10813), 500 questions (measured 2026-10-10, reader deepseek-flash, judges GPT-4o official setting, MiniMax and Claude Sonnet 5.5):
 
 | Metric | Score | Condition |
 |-|-|-|
-| Retrieval recall_any@5 | 88.3% | text-embedding-3-small |
-| QA accuracy | 44.9% | temporal metadata and abstention detection |
+| All evidence turns within top-10 | 91.2% | bge-m3, segment search on |
+| Retrieval recall_any@5 | 98.4% | session level |
+| QA accuracy (GPT-4o official judge) | 84.0% | 95% CI 80.5-87.0% |
+| QA accuracy (MiniMax judge) | 84.0% | 95% CI 80.5-87.0% |
+| QA accuracy (Claude judge) | 78.0% | 95% CI 74.2-81.4% |
 
-Retrieval finds the fragments. Accuracy drops later, when the system has to synthesize an answer from them, especially with multi-session and temporal reasoning. Conditions and analysis: [Benchmark Report](docs/benchmark.en.md).
+Retrieval finds most of the evidence. The remaining errors concentrate in questions that need summing values across sessions or computing dates (multi-session, temporal-reasoning). Conditions and analysis: [Benchmark Report](docs/benchmark.en.md).
 
 ## Documentation
 

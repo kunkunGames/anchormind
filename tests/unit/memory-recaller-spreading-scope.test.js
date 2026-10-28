@@ -1,6 +1,7 @@
 import { after, before, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { teardownTestResources, assertCleanShutdown } from "../_lifecycle.js";
+import { recallerWithSearchStub } from "./_search-candidates-stub.js";
 
 after(async () => {
   await teardownTestResources();
@@ -18,7 +19,8 @@ mock.module("../../lib/memory/signals/SpreadingActivation.js", {
   }
 });
 
-const { MemoryRecaller } = await import("../../lib/memory/processors/MemoryRecaller.js");
+const { MemoryRecaller: BaseRecaller } = await import("../../lib/memory/processors/MemoryRecaller.js");
+const MemoryRecaller = recallerWithSearchStub(BaseRecaller);
 
 function createRecaller() {
   return new MemoryRecaller({

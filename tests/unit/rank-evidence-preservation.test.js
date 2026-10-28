@@ -16,16 +16,6 @@ describe("검색 순위 증거 보존", () => {
     }
   });
 
-  it("긴급 롤백 옵션은 기존 마지막 값 우선 병합을 유지한다", () => {
-    const [result] = mergeRRF([
-      { name: "semantic", results: [{ id: "a", content: "A", similarity: 0.95 }] },
-      { name: "legacy", results: [{ id: "a", content: "A", _lexicalScore: 0.8 }] }
-    ], 60, { preserveEvidence: false });
-    assert.equal(result.similarity, 0.95);
-    assert.equal(result._lexicalScore, undefined);
-    assert.equal(result._rankEvidence, undefined);
-  });
-
   it("순위 계층과 예산 효용을 분리해 점수를 음수로 만들지 않는다", () => {
     const pool = [
       { id: "primary", content: "p", estimated_tokens: 6 },

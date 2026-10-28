@@ -32,7 +32,7 @@ const SCHEMA = "agent_memory";
 
 /** 오분류 위험이 큰 범용·플레이스홀더 명칭은 2단계 텍스트 매칭 후보에서 제외 */
 const EXCLUDED_WORKSPACES = new Set([
-  "default", "batch", "health", "personal", "nerdvana",
+  "default", "batch",
   "test-project", "other-project", "proj-a", "proj-b"
 ]);
 

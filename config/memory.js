@@ -141,7 +141,7 @@ export const MEMORY_CONFIG = {
   },
   /** L2.5 그래프 이웃 검색 설정 */
   graph: {
-    seedCount     : 10,       // L2 상위 N개 파편을 그래프 시드로 사용
+    seedCount     : 10,       // L2와 L3 상위 파편을 번갈아 고른 N개를 그래프 시드로 사용
     relationBoosts: {
       caused_by    : 1.5,
       resolved_by  : 1.5,
@@ -195,10 +195,46 @@ export const MEMORY_CONFIG = {
     /** 백필 수집기가 한 번에 처리할 미생성 파편 수 */
     backfillBatch    : Number(process.env.MEMENTO_SYNTHETIC_QUERY_BACKFILL || 20),
   },
+  /**
+   * 구간(세그먼트) 임베딩. 최대 1000자 파편 본문의 곁다리 언급이 본문 벡터에 희석되어 질문과 멀어지는 경우를
+   * 구간별 벡터로 회수한다. 생성(enabled)과 검색(searchEnabled)을 분리한다. 기본은 둘 다 꺼짐이다.
+   * 효과를 보려면 둘 다 켠다. 표가 없는 설치(마이그레이션 전)에서 검색 질의가 매번 실패하지 않도록 검색도 명시 옵트인이다.
+   */
+  segmentEmbedding: {
+    enabled          : process.env.MEMENTO_SEGMENT_EMBEDDING_ENABLED === "true",
+    searchEnabled    : process.env.MEMENTO_SEGMENT_SEARCH === "true",
+    /** 분할 규칙(코드 포인트 단위). 바꾸면 seg_version이 달라져 기존 구간이 재생성 대상이 된다. */
+    windowChars      : 300,
+    strideChars      : 150,
+    minChars         : Number(process.env.MEMENTO_SEGMENT_MIN_CHARS || 400),
+    maxSegments      : 12,
+    /** 구간 유사도 감쇠. 짧은 구간 벡터는 본문 벡터보다 코사인이 높게 나오는 경향이 있다. */
+    similarityDecay  : Number(process.env.MEMENTO_SEGMENT_DECAY || 0.95),
+    /** 구간이 순위에 영향을 줄 수 있는 조각(상승 + 신규)의 최대 수 */
+    adoptLimit       : Number(process.env.MEMENTO_SEGMENT_ADOPT || 10),
+    /** 구간 이웃 조회 수와 조각 반환 수 */
+    rowLimit         : 120,
+    searchLimit      : 30,
+    /** 구간 검색 프로브의 시간 예산(ms). 초과하면 빈 결과로 본 검색만 쓴다. */
+    searchTimeoutMs  : Number(process.env.MEMENTO_SEGMENT_SEARCH_TIMEOUT_MS || 1500),
+    /** 생성 워커 */
+    queueKey         : "memento:segment_embedding_queue",
+    intervalMs       : Number(process.env.MEMENTO_SEGMENT_INTERVAL_MS || 3000),
+    batchSize        : Number(process.env.MEMENTO_SEGMENT_BATCH || 10),
+    /** 한 배치 안에서 동시에 임베딩하는 파편 수 */
+    concurrency      : Math.max(1, Math.min(32, Number(process.env.MEMENTO_SEGMENT_CONCURRENCY || 4))),
+    maxSegmentsPerMinute: Number(process.env.MEMENTO_SEGMENT_RPM || 600),
+    /** 큐 누락과 정지 구간을 회수하는 복구 스캔 주기와 한 번에 보는 파편 수 */
+    recoveryIntervalMs: Number(process.env.MEMENTO_SEGMENT_RECOVERY_MS || 600000),
+    recoveryBatch    : 50,
+    maxAttempts      : 3
+  },
   /** 임베딩 비동기 워커 설정 */
   embeddingWorker: {
-    batchSize   : 10,
-    intervalMs  : 5000,
+    batchSize    : envInt("MEMENTO_EMBEDDING_WORKER_BATCH", 32, 1, 200),
+    /** 큐가 비었을 때의 폴링 간격. idleOnlyDelay가 켜져 있으면 일을 한 회차 뒤에는 쉬지 않는다. */
+    intervalMs   : envInt("MEMENTO_EMBEDDING_WORKER_INTERVAL_MS", 5000, 100, 600000),
+    idleOnlyDelay: (process.env.MEMENTO_EMBEDDING_WORKER_IDLE_ONLY_DELAY ?? "true") === "true",
     retryLimit  : 3,
     retryDelayMs: 2000,
     queueKey    : "memento:embedding_queue"
@@ -250,7 +286,9 @@ export const MEMORY_CONFIG = {
     maxAgeDays       : 30,
     maxImportance    : 0.55,
     keepPerType      : 5,
-    maxDeletePerCycle: 30
+    maxDeletePerCycle: 30,
+    /** reflect 처리 시간이 이 값(ms) 이상이거나 예외로 끝나면 단계별 소요 시간을 로그에 남긴다. 0이면 끈다. */
+    slowLogMs        : envInt("MEMENTO_REFLECT_SLOW_LOG_MS", 5000, 0, 600000)
   },
   /** 시맨틱 검색 설정. minSimilarity는 SearchParamAdaptor가 적응형으로 조정한다.
    *  0.40: 12쿼리 골드셋 실측에서 상위5 유용건 최대(0.5는 자유 회상 질의 침묵, 0.35는 노이즈가 이득 상쇄). */
@@ -285,6 +323,8 @@ export const MEMORY_CONFIG = {
   dedup: {
     batchSize    : Number(process.env.DEDUP_BATCH_SIZE     || 100),
     minFragments : Number(process.env.DEDUP_MIN_FRAGMENTS  || 5),
+    /** semantic_dedup 단계의 시간 상한(ms). 넘으면 남은 topic은 다음 주기에 처음부터 다시 본다. */
+    timeBudgetMs : envInt("DEDUP_TIME_BUDGET_MS", 1200000, 60000, 86400000),
   },
   /** 기억 압축 정책 (consolidate 사이클) */
   compress: {
@@ -317,8 +357,8 @@ export const MEMORY_CONFIG = {
     // topic/type 일치 요구 — 운영 데이터 검토 후 활성화
     requireSameTopicOrType: false
   },
-  /** consolidate 주기 (ms). 기본 6시간 — scheduler.js가 본 값을 참조한다. */
-  consolidateIntervalMs: Number(process.env.CONSOLIDATE_INTERVAL_MS || 21600000),
+  /** consolidate 주기 (ms). 기본 8시간(하루 3회) — scheduler.js가 본 값을 참조한다. */
+  consolidateIntervalMs: Number(process.env.CONSOLIDATE_INTERVAL_MS || 28800000),
   /**
    * consolidate 실행 조건 및 위험 stage 활성화 설정
    *

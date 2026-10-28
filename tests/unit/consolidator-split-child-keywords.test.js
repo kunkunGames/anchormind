@@ -36,7 +36,10 @@ mock.module("../../lib/config.js", {
     sensitiveScanMode      : () => "mask",
     anchorPermissionMode   : () => "warn",
     anchorLimitPerKey      : () => 1000,
+    contextAnchorTokenBudget: () => 1000,
+    anchorTokenBudgetMode  : () => "warn",
     sensitiveScanEffectiveMode: () => "mask",
+    eventTimeExtractEnabled   : () => true,
     /** ConsolidatorGC가 배경 쓰기 실패를 세는 lock-retry가 읽는 값 */
     envInt                 : (_name, fallback) => fallback,
     DEFAULT_DB_LOCK_RETRY_MAX: 3,

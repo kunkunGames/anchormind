@@ -78,6 +78,7 @@ export const SWITCHES = Object.freeze([
 
   /* 입력 검증과 쓰기 경로 */
   enumOf("MEMENTO_TOOL_ARGS_VALIDATION", ["off", "warn", "enforce"], "warn", "쓰기 경로", "tools/call 인자를 inputSchema와 대조하는 방식", { off: ["off"], invalid: "enforce", emptyOnly: true }),
+  enumOf("MEMENTO_MISSING_WORKSPACE", ["warn", "reject", "allow"], "warn", "쓰기 경로", "workspace도 키 기본값도 없는 remember, batch_remember, reflect를 경고하거나 거부한다", { off: ["allow"] }),
   boolOff("MEMENTO_TOOL_ARGS_ALLOW_UNKNOWN", "쓰기 경로", "inputSchema에 없는 인자를 위반으로 보지 않는다"),
   boolOff("MEMENTO_REMEMBER_ATOMIC", "쓰기 경로", "remember의 한도 확인과 저장을 한 트랜잭션으로 묶는다"),
   boolOff("MEMENTO_REMEMBER_DUPLICATE_GUARD", "쓰기 경로", "remember 중복 적중 시 기존 파편을 고치지 않고 상태만 알린다"),
@@ -88,8 +89,11 @@ export const SWITCHES = Object.freeze([
   enumOf("MEMENTO_SENSITIVE_SCAN",["mask", "reject", "off"], "mask", "쓰기 경로", "쓰기 값의 비밀과 개인정보를 가리고(mask) 고신뢰 탐지는 전 키 거부(reject)하거나 레거시 규칙만 적용한다(off)", { off: ["off"] }),
   enumOf("MEMENTO_WM_PG_FALLBACK", ["on", "off"], "on", "쓰기 경로", "Redis가 준비되지 않았을 때 scope=session 쓰기를 PostgreSQL 작업 기억 행으로 받는다", { off: ["off"] }),
   enumOf("MEMENTO_ANCHOR_PERMISSION", ["off", "warn", "enforce"], "warn", "쓰기 경로", "anchor 권한이 없거나 키별 상한에 이른 키의 앵커 요청을 일반 파편으로 저장하고 경고하거나(warn) 거부한다(enforce)", { off: ["off"], exception: "보안 집행" }),
+  enumOf("MEMENTO_ANCHOR_TOKEN_BUDGET_MODE", ["off", "warn", "reject"], "warn", "쓰기 경로", "context 앵커 토큰 예산(MEMENTO_CONTEXT_ANCHOR_TOKEN_BUDGET)을 넘기는 앵커 지정에 경고와 내릴 후보를 싣거나(warn) 앵커 지정을 거둔다(reject)", { off: ["off"] }),
   enumOf("MEMENTO_DEDUP_SCOPE", ["workspace", "key"], "workspace", "쓰기 경로", "같은 본문 중복 판정을 키와 workspace 단위로 한다(key는 키 단위)", { off: ["key"] }),
   enumOf("MEMENTO_FORGET_CASCADE", ["on", "off"], "on", "쓰기 경로", "forget이 같은 트랜잭션에서 case_events 요약 사본과 모순 해소 기록을 지우고 purged 건수를 알린다", { off: ["off"] }),
+  enumOf("MEMENTO_EVENT_TIME_EXTRACT", ["on", "off"], "on", "쓰기 경로", "eventTime이 없는 쓰기가 본문의 날짜 표현에서 사건 시각을 뽑아 저장한다", { off: ["off"] }),
+  enumOf("MEMENTO_DIGEST", ["on", "off"], "on", "검색", "정리 주기가 topic 시간선과 선호 목록 요약을 만들고 recall이 집계, 시간, 상태, 선호 질문에 싣는다", { off: ["off"] }),
 
   /* 저장소와 캐시 */
   boolOff("REDIS_ENABLED", "저장소", "Redis를 쓴다(L1 검색, 세션, 캐시)"),
@@ -101,8 +105,6 @@ export const SWITCHES = Object.freeze([
   boolOn("MEMENTO_QUERY_PROFILE_ENABLED", "검색", "질의 의도별 검색 프로파일을 적용한다"),
   boolOn("MEMENTO_KEYWORD_SEMANTIC_FALLBACK", "검색", "keywords만 있는 recall에 시맨틱 보조 검색을 더한다"),
   boolOn("MEMENTO_WORKSPACE_DECAY", "검색", "workspace가 다른 파편의 순위 점수를 낮춘다"),
-  enumOf("MEMENTO_RANK_BEFORE_BUDGET", ["on", "off"], "on", "검색", "recall이 최종 점수를 매긴 뒤 토큰 예산 안에서 파편을 고른다", { off: ["off"] }),
-  enumOf("MEMENTO_RANKING_FIX_V2", ["on", "off"], "on", "검색", "검색 채널 증거와 lexical-only 순위 계층을 효용 점수와 분리한다", { off: ["off"] }),
   enumOf("MEMENTO_CONTEXT_ANNOTATE", ["on", "off"], "on", "검색", "context 주입 줄 끝에 저장일과 assertion 주석을 붙인다", { off: ["off"] }),
   enumOf("MEMENTO_LEXICAL_CHANNEL", ["on", "off"], "on", "검색", "본문 형태소 토큰 전문 검색 후보를 RRF에 더하고 저장 시 content_tokens를 채운다", { off: ["off"] }),
   offDisables("MEMENTO_VECTOR_FORCE_INDEX", "검색", "벡터 검색에 인덱스 강제 planner 힌트를 쓴다"),
@@ -110,6 +112,8 @@ export const SWITCHES = Object.freeze([
   boolOff("MEMENTO_SYNTHETIC_QUERY_ENABLED", "검색", "파편 저장 시 LLM으로 합성 역질의를 만들어 색인한다"),
   boolOn("MEMENTO_SYNTHETIC_QUERY_SEARCH", "검색", "합성 역질의 벡터를 검색에 반영한다"),
   boolOn("MEMENTO_DERIVED_FRESHNESS_ENFORCE", "검색", "현재 본문 버전에서 생성된 합성 역질의만 검색한다"),
+  boolOff("MEMENTO_SEGMENT_EMBEDDING_ENABLED", "검색", "긴 파편 본문을 구간으로 나눠 구간별 임베딩을 만든다"),
+  boolOff("MEMENTO_SEGMENT_SEARCH", "검색", "구간 임베딩을 L3 시맨틱 검색에 반영한다(생성 스위치와 별개이며 둘 다 켜야 효과가 있다)"),
 
   /* 기억 처리 */
   boolOff("ENABLE_RECONSOLIDATION", "기억 처리", "재공고화 엔진으로 링크 가중치와 대체를 갱신한다"),

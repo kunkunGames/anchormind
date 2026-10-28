@@ -212,7 +212,7 @@ describe("forget 삭제 연쇄(실제 행)", () => {
     const res = await mm.forget({ id: s.t, agentId: "default", _keyId: KEY_A, _groupKeyIds: [KEY_A] });
 
     assert.equal(res.deleted, 1);
-    assert.deepEqual(res.purged, { case_summaries: 2, audit_fragments: 1 });
+    assert.deepEqual(res.purged, { case_summaries: 2, audit_fragments: 1, digests: 0 });
 
     assert.equal(await leakedSummaries([s.t, s.a]), 0);
     const refs = await danglingRefs([s.t, s.a]);
@@ -250,7 +250,7 @@ describe("forget 삭제 연쇄(실제 행)", () => {
     /** master가 해소 기록 하나를 지우면 그 행만 지운다. */
     const own = await mm.forget({ id: audit1, _keyId: null });
     assert.equal(own.deleted, 1);
-    assert.deepEqual(own.purged, { case_summaries: 0, audit_fragments: 0 });
+    assert.deepEqual(own.purged, { case_summaries: 0, audit_fragments: 0, digests: 0 });
     const left = await directQuery(
       `SELECT id FROM ${SCHEMA}.fragments WHERE id = ANY($1::text[]) ORDER BY id`, [[t, w, audit2]]
     );
@@ -266,7 +266,7 @@ describe("forget 삭제 연쇄(실제 행)", () => {
     );
     const res = await mm.forget({ id: t, _keyId: KEY_A, _groupKeyIds: [KEY_A] });
     assert.equal(res.deleted, 1);
-    assert.deepEqual(res.purged, { case_summaries: 0, audit_fragments: 1 });
+    assert.deepEqual(res.purged, { case_summaries: 0, audit_fragments: 1, digests: 0 });
     const after2 = await directQuery(
       `SELECT id, linked_to FROM ${SCHEMA}.fragments WHERE id = ANY($1::text[]) ORDER BY id`, [[t, audit2, audit3]]
     );
@@ -288,12 +288,31 @@ describe("forget 삭제 연쇄(실제 행)", () => {
     const s   = await seedContradiction();
     const out = await new FragmentWriter().deleteWithCascade([s.t], "default", KEY_B);
 
-    assert.deepEqual(out, { deleted: 0, purged: { case_summaries: 0, audit_fragments: 0 } });
+    assert.deepEqual(out, { deleted: 0, purged: { case_summaries: 0, audit_fragments: 0, digests: 0 } });
     assert.equal(await leakedSummaries([s.t]), 2);
     const { rows } = await directQuery(
       `SELECT count(*)::int AS n FROM ${SCHEMA}.fragments WHERE id = ANY($1::text[])`, [[s.t, s.a]]
     );
     assert.equal(rows[0].n, 2);
+  });
+
+  it("forget이 지운 파편을 출처로 가진 묶음 요약을 함께 지우고 다른 요약은 둔다", async () => {
+    const gone = await insertFragment({ id: fid(), content: "fc digest source gone", keyId: KEY_A });
+    const kept = await insertFragment({ id: fid(), content: "fc digest source kept", keyId: KEY_A });
+    const subject = `fc-digest-${crypto.randomUUID().slice(0, 8)}`;
+    await directQuery(
+      `INSERT INTO ${SCHEMA}.fragment_digest (key_id, workspace, agent_id, kind, subject, content, source_ids, source_hash, item_count)
+       VALUES ($1, NULL, 'default', 'topic_timeline', $2, 'fc gone line', ARRAY[$3, $4], 'h1', 2),
+              ($1, NULL, 'default', 'topic_timeline', $5, 'fc kept line', ARRAY[$4], 'h2', 1)`,
+      [KEY_A, subject, gone, kept, `${subject}-other`]
+    );
+    const res = await mm.forget({ id: gone, _keyId: KEY_A, _groupKeyIds: [KEY_A] });
+    assert.equal(res.deleted, 1);
+    assert.equal(res.purged.digests, 1);
+    const { rows } = await directQuery(
+      `SELECT subject FROM ${SCHEMA}.fragment_digest WHERE subject LIKE $1 ORDER BY subject`, [`${subject}%`]
+    );
+    assert.deepEqual(rows.map(r => r.subject), [`${subject}-other`]);
   });
 
   it("topic forget은 대상 여러 개의 요약을 한 트랜잭션에서 바꾼다", async () => {
@@ -307,7 +326,7 @@ describe("forget 삭제 연쇄(실제 행)", () => {
     const res = await mm.forget({ topic, _keyId: KEY_A, _groupKeyIds: [KEY_A] });
 
     assert.equal(res.deleted, 3);
-    assert.deepEqual(res.purged, { case_summaries: 3, audit_fragments: 0 });
+    assert.deepEqual(res.purged, { case_summaries: 3, audit_fragments: 0, digests: 0 });
     assert.equal(await leakedSummaries(ids), 0);
   });
 

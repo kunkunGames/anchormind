@@ -32,12 +32,12 @@ describe("renderOverviewCards", () => {
     assert.ok(el.className.includes("loading-spinner"));
   });
 
-  test("6개 KPI 카드 생성 (glass-panel)", () => {
-    const stats = { fragments: 100, sessions: 5, apiCallsToday: 42, activeKeys: 3, system: { dbSizeBytes: 1048576 }, redis: "connected" };
+  test("7개 KPI 카드 생성 (glass-panel), 도구 호출 수 포함", () => {
+    const stats = { fragments: 100, sessions: 5, apiCallsToday: 42, toolCallsToday: 7, activeKeys: 3, system: { dbSizeBytes: 1048576 }, redis: "connected" };
     const grid = renderOverviewCards(stats);
-    assert.equal(grid.className, "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8");
+    assert.equal(grid.className, "grid grid-cols-1 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8");
     const cards = grid.querySelectorAll(".glass-panel");
-    assert.equal(cards.length, 6);
+    assert.equal(cards.length, 7);
   });
 
   test("KPI 카드에 ghost icon wrapper (opacity-10) 존재", () => {
